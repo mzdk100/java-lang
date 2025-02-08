@@ -1,5 +1,6 @@
 fn main() -> anyhow::Result<()> {
     let input = r#"
+        /** 包定义 */
         package com.test;
 
         import java.lang.System;
@@ -31,11 +32,10 @@ fn main() -> anyhow::Result<()> {
         }
     "#;
 
-    let (remaining, tokens) = javalang::tokenize(input)?;
+    let (remaining, tokens) = javalang::TokenStream::from_str(input)?;
     print!("{}", remaining);
-    for token in tokens {
-        println!("{}", token);
-    }
+    let (_remaining, cu) = javalang::parse(tokens)?;
+    println!("{:?}",cu);
 
     Ok(())
 }

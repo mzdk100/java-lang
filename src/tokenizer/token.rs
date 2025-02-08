@@ -1,6 +1,6 @@
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Token {
     /// abstract
     Abstract,
@@ -125,7 +125,7 @@ pub enum Token {
     /// 任意字符串字面量
     StringLiteral(String),
     /// 空值字面量
-        NullLiteral,
+    NullLiteral,
 
     /// 右移 `>>`
     ShiftRight,
@@ -490,6 +490,10 @@ impl Token {
 
     pub fn is_null(&self) -> bool {
         &Self::NullLiteral == self // 需要自定义解析逻辑
+    }
+
+    pub fn is_documentation(&self) -> bool {
+        matches!(self, Self::JavaDoc(_))
     }
 
     pub fn is_separator(&self) -> bool {

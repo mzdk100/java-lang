@@ -1,18 +1,9 @@
 use super::Token;
-use nom::{
-    branch::{alt, permutation},
-    bytes::complete::{tag, take_until, take_while},
-    character::{
-        complete::{alpha1, bin_digit1, char, digit1, hex_digit1, oct_digit1},
-        one_of,
-        streaming::multispace0,
-    },
-    combinator::{map, opt},
-    error::{Error, ErrorKind},
-    multi::many0,
-    sequence::{delimited, pair, preceded, terminated},
-    IResult, Parser,
-};
+use nom::{branch::{alt, permutation}, bytes::complete::{tag, take_until, take_while}, character::{
+    complete::{alpha1, bin_digit1, char, digit1, hex_digit1, oct_digit1},
+    one_of,
+    streaming::multispace0,
+}, combinator::{map, opt}, error::{Error, ErrorKind}, multi::many0, sequence::{delimited, pair, preceded, terminated}, IResult, Parser};
 
 fn keyword(i: &str) -> IResult<&str, Token> {
     let (remaining, out) = alt([
@@ -270,7 +261,7 @@ fn java_doc(i: &str) -> IResult<&str, Token> {
     Ok((remaining, Token::JavaDoc(out.to_string())))
 }
 
-fn one_token(i: &str) -> IResult<&str, Token> {
+pub fn one_token(i: &str) -> IResult<&str, Token> {
     let Ok((remaining, _)) = multispace0::<_, Error<_>>(i) else {
         return Err(nom::Err::Error(Error::new("", ErrorKind::Complete)));
     };
@@ -295,12 +286,4 @@ fn one_token(i: &str) -> IResult<&str, Token> {
         identifier,
     ))
     .parse(remaining)
-}
-
-pub fn tokenize(i: &str) -> IResult<&str, Vec<Token>> {
-    let (remaining, out) = many0(one_token).parse(i)?;
-    if remaining.trim_end().is_empty() {
-        return Ok((remaining, out));
-    }
-    Err(nom::Err::Failure(Error::new(remaining, ErrorKind::Fail)))
 }
