@@ -1,4 +1,4 @@
-use super::{super::PackageDeclaration, identifier, java_doc};
+use super::{super::PackageDeclaration, identifier, documentation_comment};
 use crate::{ts, Token, TokenStream};
 use nom::{bytes::tag, combinator::opt, multi::separated_list1, IResult, Parser};
 use std::borrow::Cow;
@@ -27,7 +27,7 @@ use std::borrow::Cow;
 /// let (_, tokens) = TokenStream::from_str(
 ///     "package com.test;",
 /// )?;
-/// assert!(!tokens.is_empty());
+/// assert! (!tokens.is_empty());
 ///
 /// let (tokens, package) = package_declaration(tokens)?;
 /// assert_eq!(package.name, "com.test");
@@ -43,7 +43,7 @@ use std::borrow::Cow;
 pub fn package_declaration<'a>(
     tokens: TokenStream,
 ) -> IResult<TokenStream, PackageDeclaration<'a>> {
-    let (tokens, doc) = opt(java_doc).parse(tokens)?;
+    let (tokens, documentation) = opt(documentation_comment).parse(tokens)?;
     let (tokens, _) = tag(ts![Package]).parse(tokens)?;
     let (tokens, idents) = separated_list1(tag(ts![Dot]), identifier).parse(tokens)?;
     let (tokens, _) = tag(ts![SemiColon]).parse(tokens)?;
@@ -52,15 +52,13 @@ pub fn package_declaration<'a>(
         .map(|i| i.to_string())
         .collect::<Vec<_>>()
         .join(Token::DOT);
-    let doc = doc
-        .map(|i| match i {
-            Token::JavaDoc(s) => s,
-            _ => Default::default(),
-        })
-        .unwrap_or_default();
     Ok((
         tokens,
-        PackageDeclaration::new(Cow::Owned(name), Default::default(), Cow::Owned(doc)),
+        PackageDeclaration {
+            name: Cow::Owned(name),
+            modifiers: Default::default(),
+            documentation,
+        },
     ))
 }
 
@@ -79,7 +77,14 @@ mod tests {
         assert!(!tokens.is_empty());
 
         let (tokens, package) = package_declaration(tokens)?;
-        assert_eq!(package, PackageDeclaration::new("com.test".into(), Default::default(), " 定义包 ".into()));
+        assert_eq!(
+            package,
+            PackageDeclaration {
+                name: "com.test".into(),
+                modifiers: Default::default(),
+                documentation: Some(" 定义包 ".into())
+            }
+        );
 
         assert!(tokens.is_empty());
 

@@ -1,19 +1,24 @@
-mod compile_unit;
+mod compilation_unit;
 mod import;
 mod package;
 
-pub use {compile_unit::*, import::*, package::*};
+pub use {compilation_unit::*, import::*, package::*};
 
-use super::CompilationUnitDeclaration;
+use super::{CompilationUnitDeclaration,DocumentationComment};
 use crate::{Token, TokenStream};
 use nom::{error::ErrorKind, IResult, Input};
 
-fn java_doc(tokens: TokenStream) -> IResult<TokenStream, Token> {
+fn documentation_comment<'a>(tokens: TokenStream) -> IResult<TokenStream, DocumentationComment<'a>> {
     let (tokens, out) = tokens
         .split_at_position1_complete(|token| !token.is_documentation(), ErrorKind::Complete)?;
 
     let token = out.iter_elements().next().unwrap();
-    Ok((tokens, token))
+    let documentation = if let Token::JavaDoc(d) = token {
+        d
+    } else {
+        Default::default()
+    };
+    Ok((tokens, documentation.into()))
 }
 
 fn identifier(tokens: TokenStream) -> IResult<TokenStream, Token> {

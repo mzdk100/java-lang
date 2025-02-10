@@ -1,175 +1,86 @@
+mod compilation_unit;
+mod documentation_comment;
+mod import;
+mod module;
+mod package;
+mod top_level;
+
 use std::{
     borrow::Cow,
     fmt::{Display, Formatter, Result as FmtResult},
 };
-
-#[derive(Debug)]
-pub struct CompilationUnitDeclaration<'a> {
-    pub package: PackageDeclaration<'a>,
-    pub imports: Vec<ImportDeclaration<'a>>,
-    pub items: Vec<CompilationUnitItemDeclaration<'a>>,
-}
-
-impl<'a> CompilationUnitDeclaration<'a> {
-    pub(crate) fn new(
-        package: PackageDeclaration<'a>,
-        imports: Vec<ImportDeclaration<'a>>,
-        items: Vec<CompilationUnitItemDeclaration<'a>>,
-    ) -> Self {
-        Self {
-            package,
-            imports,
-            items,
-        }
-    }
-}
-
-impl<'a> Display for CompilationUnitDeclaration<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        Display::fmt(&self.package, f)?;
-        for i in &self.imports {
-            Display::fmt(&i, f)?;
-            write!(f, "\n")?;
-        }
-        for i in &self.items {
-            Display::fmt(&i, f)?;
-            write!(f, "\n")?;
-        }
-
-        Ok(())
-    }
-}
-
-/// ImportDeclaration 枚举表示Java中的导入声明。
-#[derive(Debug)]
-pub enum ImportDeclaration<'a> {
-    /// 单类型导入声明，参数是导入的类或接口的名称。
-    SimpleType(Cow<'a, str>),
-    /// 需求类型导入声明，参数是导入的包、类或接口的名称（路径）。
-    TypeOnDemand(Cow<'a, str>),
-    /// 单静态导入声明，参数是导入的类或接口的名称 + 导入的静态成员的名称。
-    SingleStatic(Cow<'a, str>),
-    /// 静态需求导入声明，参数是导入的类或接口的名称。
-    StaticOnDemand(Cow<'a, str>),
-}
-
-impl<'a> Display for ImportDeclaration<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        match self {
-            Self::SimpleType(r) | Self::SingleStatic(r) => write!(f, "import {};", r),
-            Self::TypeOnDemand(r) | Self::StaticOnDemand(r) => write!(f, "import {}.*;", r),
-        }
-    }
-}
-
-#[derive(Debug, Default, PartialEq)]
-pub struct PackageDeclaration<'a> {
-    pub name: Cow<'a, str>,
-    pub modifiers: Vec<Annotation<'a>>,
-    pub documentation: Cow<'a, str>,
-}
-
-impl<'a> PackageDeclaration<'a> {
-    pub(crate) fn new(
-        name: Cow<'a, str>,
-        modifiers: Vec<Annotation<'a>>,
-        documentation: Cow<'a, str>,
-    ) -> Self {
-        Self {
-            name,
-            modifiers,
-            documentation,
-        }
-    }
-}
-
-impl<'a> Display for PackageDeclaration<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        if !self.documentation.is_empty() {
-            write!(f, "/**{}*/\n", self.documentation)?;
-        }
-        for i in &self.modifiers {
-            Display::fmt(&i, f)?;
-        }
-        if !self.name.is_empty() {
-            write!(f, "package {};\n", self.name)?;
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub enum CompilationUnitItemDeclaration<'a> {
-    Class(ClassDeclaration<'a>),
-    Enum(EnumDeclaration<'a>),
-    Interface(InterfaceDeclaration<'a>),
-    Annotation(AnnotationDeclaration<'a>),
-}
-
-impl<'a> Display for CompilationUnitItemDeclaration<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        match self {
-            Self::Class(r) => Display::fmt(r, f),
-            Self::Interface(r) => Display::fmt(r, f),
-            Self::Enum(r) => Display::fmt(r, f),
-            Self::Annotation(r) => Display::fmt(r, f),
-        }
-    }
-}
+pub use {
+    compilation_unit::*, documentation_comment::*, import::*, module::*, package::*, top_level::*,
+};
 
 #[derive(Debug)]
 pub struct ClassDeclaration<'a> {
-    name: Cow<'a, str>,
+    pub name: Cow<'a, str>,
     // attrs = ("type_parameters", "extends", "implements")
-    // attrs = ("body", "documentation",, "modifiers", "annotations")
+    // attrs = ("body", "modifiers", "annotations")
+    pub documentation: Option<DocumentationComment<'a>>,
     // fields, methods, constructors
 }
 
 impl<'a> Display for ClassDeclaration<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        if let Some(ref d) = self.documentation {
+            Display::fmt(d, f)?;
+        }
         write!(f, "class {}", self.name)
     }
 }
 
 #[derive(Debug)]
 pub struct EnumDeclaration<'a> {
-    name: Cow<'a, str>,
+    pub name: Cow<'a, str>,
     // attrs = ("implements",)
     // fields, methods
-    // attrs = ("body", "documentation",, "modifiers", "annotations")
+    // attrs = ("body", "modifiers", "annotations")
+    pub documentation: Option<DocumentationComment<'a>>,
     // fields, methods, constructors
 }
 
 impl<'a> Display for EnumDeclaration<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        if let Some(ref d) = self.documentation {
+            Display::fmt(d, f)?;
+        }
         write!(f, "enum {}", self.name)
     }
 }
 
 #[derive(Debug)]
 pub struct InterfaceDeclaration<'a> {
-    name: Cow<'a, str>,
+    pub name: Cow<'a, str>,
     // attrs = ("type_parameters", "extends",)
-    // attrs = ("body", "documentation",, "modifiers", "annotations")
+    // attrs = ("body", "modifiers", "annotations")
+    pub documentation: Option<DocumentationComment<'a>>,
     // fields, methods, constructors
 }
 
 impl<'a> Display for InterfaceDeclaration<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        if let Some(ref d) = self.documentation {
+            Display::fmt(d, f)?;
+        }
         write!(f, "interface {}", self.name)
     }
 }
 
 #[derive(Debug)]
 pub struct AnnotationDeclaration<'a> {
-    name: Cow<'a, str>,
-    // attrs = ("body", "documentation",, "modifiers", "annotations")
+    pub name: Cow<'a, str>,
+    // attrs = ("body", "modifiers", "annotations")
+    pub documentation: Option<DocumentationComment<'a>>,
     // fields, methods, constructors
 }
 
 impl<'a> Display for AnnotationDeclaration<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        if let Some(ref d) = self.documentation {
+            Display::fmt(d, f)?;
+        }
         write!(f, "@interface {}", self.name)
     }
 }

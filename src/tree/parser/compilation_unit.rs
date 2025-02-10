@@ -33,8 +33,8 @@ use nom::{combinator::opt, IResult, Parser};
 /// assert!(!tokens.is_empty());
 ///
 /// let (tokens, cu) = compilation_unit_declaration(tokens)?;
-/// assert_eq!(cu.package.name, "com.test");
-/// assert_eq!(cu.imports.len(), 1);
+/// assert_eq!(cu.package().unwrap().name, "com.test");
+/// assert_eq!(cu.imports().len(), 1);
 ///
 /// assert!(tokens.is_empty());
 /// Ok(())
@@ -52,7 +52,7 @@ pub fn compilation_unit_declaration<'a>(
 
     Ok((
         tokens,
-        CompilationUnitDeclaration::new(package.unwrap_or_default(), imports, Default::default()),
+        CompilationUnitDeclaration::Ordinary {package, imports, top_level_class_or_interfaces: Default::default()},
     ))
 }
 
@@ -71,8 +71,8 @@ mod tests {
         assert!(!tokens.is_empty());
 
         let (tokens, cu) = compilation_unit_declaration(tokens)?;
-        assert_eq!(cu.package.name, "com.test");
-        assert_eq!(cu.imports.len(), 1);
+        assert_eq!(cu.package().unwrap().name, "com.test");
+        assert_eq!(cu.imports().len(), 1);
 
         assert!(tokens.is_empty());
 
