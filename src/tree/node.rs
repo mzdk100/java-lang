@@ -1,14 +1,21 @@
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    fmt::{Display, Formatter, Result as FmtResult},
+};
 
 #[derive(Debug)]
-pub struct CompilationUnit<'a> {
+pub struct CompilationUnitDeclaration<'a> {
     pub package: PackageDeclaration<'a>,
-    pub imports: Vec<Import<'a>>,
-    pub items: Vec<CompilationUnitItem>,
+    pub imports: Vec<ImportDeclaration<'a>>,
+    pub items: Vec<CompilationUnitItemDeclaration<'a>>,
 }
 
-impl<'a> CompilationUnit<'a> {
-    pub(crate) fn new(package: PackageDeclaration<'a>, imports: Vec<Import<'a>>, items: Vec<CompilationUnitItem>) -> Self {
+impl<'a> CompilationUnitDeclaration<'a> {
+    pub(crate) fn new(
+        package: PackageDeclaration<'a>,
+        imports: Vec<ImportDeclaration<'a>>,
+        items: Vec<CompilationUnitItemDeclaration<'a>>,
+    ) -> Self {
         Self {
             package,
             imports,
@@ -17,22 +24,57 @@ impl<'a> CompilationUnit<'a> {
     }
 }
 
-#[derive(Debug)]
-pub struct Import<'a> {
-    pub path: Cow<'a, str>,
-    pub r#static: bool,
-    pub wildcard: bool
- }
+impl<'a> Display for CompilationUnitDeclaration<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        Display::fmt(&self.package, f)?;
+        for i in &self.imports {
+            Display::fmt(&i, f)?;
+            write!(f, "\n")?;
+        }
+        for i in &self.items {
+            Display::fmt(&i, f)?;
+            write!(f, "\n")?;
+        }
 
+        Ok(())
+    }
+}
+
+/// ImportDeclaration 枚举表示Java中的导入声明。
 #[derive(Debug)]
+pub enum ImportDeclaration<'a> {
+    /// 单类型导入声明，参数是导入的类或接口的名称。
+    SimpleType(Cow<'a, str>),
+    /// 需求类型导入声明，参数是导入的包、类或接口的名称（路径）。
+    TypeOnDemand(Cow<'a, str>),
+    /// 单静态导入声明，参数是导入的类或接口的名称 + 导入的静态成员的名称。
+    SingleStatic(Cow<'a, str>),
+    /// 静态需求导入声明，参数是导入的类或接口的名称。
+    StaticOnDemand(Cow<'a, str>),
+}
+
+impl<'a> Display for ImportDeclaration<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Self::SimpleType(r) | Self::SingleStatic(r) => write!(f, "import {};", r),
+            Self::TypeOnDemand(r) | Self::StaticOnDemand(r) => write!(f, "import {}.*;", r),
+        }
+    }
+}
+
+#[derive(Debug, Default, PartialEq)]
 pub struct PackageDeclaration<'a> {
     pub name: Cow<'a, str>,
     pub modifiers: Vec<Annotation<'a>>,
-    pub documentation: Cow<'a, str>
+    pub documentation: Cow<'a, str>,
 }
 
 impl<'a> PackageDeclaration<'a> {
-    pub(crate) fn new(name: Cow<'a, str>, modifiers: Vec<Annotation<'a>>, documentation: Cow<'a, str>) -> Self {
+    pub(crate) fn new(
+        name: Cow<'a, str>,
+        modifiers: Vec<Annotation<'a>>,
+        documentation: Cow<'a, str>,
+    ) -> Self {
         Self {
             name,
             modifiers,
@@ -41,40 +83,95 @@ impl<'a> PackageDeclaration<'a> {
     }
 }
 
-#[derive(Debug)]
-pub enum CompilationUnitItem {
-    Class(ClassDeclaration),
-    Enum(EnumDeclaration),
-    Interface(InterfaceDeclaration),
-    Annotation(AnnotationDeclaration),
+impl<'a> Display for PackageDeclaration<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        if !self.documentation.is_empty() {
+            write!(f, "/**{}*/\n", self.documentation)?;
+        }
+        for i in &self.modifiers {
+            Display::fmt(&i, f)?;
+        }
+        if !self.name.is_empty() {
+            write!(f, "package {};\n", self.name)?;
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
-pub struct ClassDeclaration {
+pub enum CompilationUnitItemDeclaration<'a> {
+    Class(ClassDeclaration<'a>),
+    Enum(EnumDeclaration<'a>),
+    Interface(InterfaceDeclaration<'a>),
+    Annotation(AnnotationDeclaration<'a>),
+}
+
+impl<'a> Display for CompilationUnitItemDeclaration<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Self::Class(r) => Display::fmt(r, f),
+            Self::Interface(r) => Display::fmt(r, f),
+            Self::Enum(r) => Display::fmt(r, f),
+            Self::Annotation(r) => Display::fmt(r, f),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ClassDeclaration<'a> {
+    name: Cow<'a, str>,
     // attrs = ("type_parameters", "extends", "implements")
-    // attrs = ("name", "body", "documentation",, "modifiers", "annotations")
+    // attrs = ("body", "documentation",, "modifiers", "annotations")
     // fields, methods, constructors
 }
 
+impl<'a> Display for ClassDeclaration<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "class {}", self.name)
+    }
+}
+
 #[derive(Debug)]
-pub struct EnumDeclaration {
+pub struct EnumDeclaration<'a> {
+    name: Cow<'a, str>,
     // attrs = ("implements",)
     // fields, methods
-    // attrs = ("name", "body", "documentation",, "modifiers", "annotations")
+    // attrs = ("body", "documentation",, "modifiers", "annotations")
     // fields, methods, constructors
 }
 
+impl<'a> Display for EnumDeclaration<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "enum {}", self.name)
+    }
+}
+
 #[derive(Debug)]
-pub struct InterfaceDeclaration {
+pub struct InterfaceDeclaration<'a> {
+    name: Cow<'a, str>,
     // attrs = ("type_parameters", "extends",)
-    // attrs = ("name", "body", "documentation",, "modifiers", "annotations")
+    // attrs = ("body", "documentation",, "modifiers", "annotations")
     // fields, methods, constructors
 }
 
+impl<'a> Display for InterfaceDeclaration<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "interface {}", self.name)
+    }
+}
+
 #[derive(Debug)]
-pub struct AnnotationDeclaration {
-    // attrs = ("name", "body", "documentation",, "modifiers", "annotations")
+pub struct AnnotationDeclaration<'a> {
+    name: Cow<'a, str>,
+    // attrs = ("body", "documentation",, "modifiers", "annotations")
     // fields, methods, constructors
+}
+
+impl<'a> Display for AnnotationDeclaration<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "@interface {}", self.name)
+    }
 }
 
 pub trait BasicType {
@@ -93,10 +190,16 @@ pub trait TypeParameter {
     // attrs = ("name", "extends")
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Annotation<'a> {
     pub name: Cow<'a, str>,
     // element:
+}
+
+impl<'a> Display for Annotation<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "@{}", self.name)
+    }
 }
 
 pub trait ElementValuePair {
@@ -321,6 +424,5 @@ pub trait EnumConstantDeclaration {
 
 pub trait AnnotationMethod {
     // attrs = ("name", "return_type", "dimensions", "default", "modifiers", "annotations")
-    fn name(&self) {
-    }
+    fn name(&self) {}
 }

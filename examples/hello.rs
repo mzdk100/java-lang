@@ -32,10 +32,10 @@ fn main() -> anyhow::Result<()> {
         }
     "#;
 
-    let (remaining, tokens) = javalang::TokenStream::from_str(input)?;
+    let (remaining, tokens) = java_lang::TokenStream::from_str(input)?;
     print!("{}", remaining);
-    let (_remaining, cu) = javalang::parse(tokens)?;
-    println!("{:?}",cu);
+    let (_remaining, cu) = java_lang::parse(tokens)?;
+    println!("{}",cu);
 
     Ok(())
 }

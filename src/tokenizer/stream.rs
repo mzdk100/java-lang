@@ -6,12 +6,16 @@ use nom::{
 };
 use std::{borrow::Cow, iter::Enumerate, vec::IntoIter};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct TokenStream {
     data: Cow<'static, Vec<Token>>,
 }
 
 impl TokenStream {
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
     #[inline]
     pub fn from_str(input: &str) -> IResult<&str, Self> {
         let (remaining, out) = many0(one_token).parse(input)?;
