@@ -24,9 +24,12 @@ use std::borrow::Cow;
 /// # 示例
 ///
 /// ```rust
+/// fn main() -> anyhow::Result<()> {
 /// use java_lang::{TokenStream,import_declaration};
 /// let (_, tokens) = TokenStream::from_str("import java.util.List;")?;
 /// let (_, import_declaration) = import_declaration(tokens)?;
+/// Ok(())
+/// }
 /// ```
 ///
 /// # 错误处理
@@ -77,9 +80,12 @@ pub fn import_declaration<'a>(tokens: TokenStream) -> IResult<TokenStream, Impor
 /// # 示例
 ///
 /// ```rust
+/// fn main() -> anyhow::Result<()> {
 /// use java_lang::{TokenStream,import_declarations};
 /// let (_, tokens) = TokenStream::from_str("import java.util.List;")?;
 /// let (_, import_declarations) = import_declarations(tokens)?;
+/// Ok(())
+/// }
 /// ```
 ///
 /// # 错误处理

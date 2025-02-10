@@ -18,6 +18,7 @@ use std::borrow::Cow;
 /// # 示例
 ///
 /// ```
+/// fn main() -> anyhow::Result<()> {
 /// use java_lang::{
 /// TokenStream,
 /// package_declaration
@@ -32,6 +33,8 @@ use std::borrow::Cow;
 /// assert_eq!(package.name, "com.test");
 ///
 /// assert!(tokens.is_empty());
+/// Ok(())
+/// }
 /// ```
 ///
 /// # 错误

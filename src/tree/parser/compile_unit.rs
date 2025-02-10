@@ -20,6 +20,7 @@ use nom::{combinator::opt, IResult, Parser};
 /// # 示例
 ///
 /// ```
+/// fn main() -> anyhow::Result<()> {
 /// use java_lang::{
 /// TokenStream,
 /// compilation_unit_declaration
@@ -36,6 +37,8 @@ use nom::{combinator::opt, IResult, Parser};
 /// assert_eq!(cu.imports.len(), 1);
 ///
 /// assert!(tokens.is_empty());
+/// Ok(())
+/// }
 /// ```
 ///
 /// # 错误
