@@ -1,18 +1,23 @@
 [package]
 name = "java-lang"
-description = "用于rust的java语法解析器。根据Java 23 规范实现。"
-keywords = ["java","parser","ast","lang", "jvm"]
 version = "0.1.0"
-license = "Apache-2.0"
-edition = "2021"
-readme = "README.md"
-repository = "https://github.com/mzdk100/java-lang.git"
+edition = "2024"
+description = "A Java AST parser in Rust, syn-style API for Java 25 (JLS SE 25)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/user/java-lang"
+readme = false
+keywords = ["java", "parser", "ast", "jls", "java25"]
+categories = ["parser-implementations"]
 
 [dependencies]
+thiserror = "2"
+unicode-xid = "0.2"
 
-[dependencies.nom]
-features = ["default"]
-version = "8.0.0"
+[dev-dependencies]
+prettyplease = "0.2"
+walkdir = "2"
 
-[dev-dependencies.anyhow]
-version = "1.0.95"
+[features]
+default = []
+# Enable extra diagnostics and span information
+full = []
