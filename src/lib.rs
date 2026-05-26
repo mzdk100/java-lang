@@ -50,3 +50,4 @@ pub use token::{Token, TokenKind};
 
 // Re-export the top-level AST types for convenience
 pub use ast::compilation_unit::CompilationUnit;
+pub use ast::{Comment, CommentKind};

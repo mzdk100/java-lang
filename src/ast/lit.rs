@@ -16,12 +16,12 @@ pub enum Lit {
 impl Lit {
     pub fn span(&self) -> Span {
         match self {
-            Lit::Int(l) => l.span,
-            Lit::Float(l) => l.span,
-            Lit::Bool(l) => l.span,
-            Lit::Char(l) => l.span,
-            Lit::Str(l) => l.span,
-            Lit::Null(l) => l.span,
+            Self::Int(l) => l.span,
+            Self::Float(l) => l.span,
+            Self::Bool(l) => l.span,
+            Self::Char(l) => l.span,
+            Self::Str(l) => l.span,
+            Self::Null(l) => l.span,
         }
     }
 }

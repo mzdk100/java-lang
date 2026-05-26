@@ -21,20 +21,20 @@ pub enum Type {
 impl Type {
     pub fn span(&self) -> Span {
         match self {
-            Type::Primitive(p) => p.span(),
-            Type::Reference(r) => r.span(),
-            Type::Void(s) => *s,
+            Self::Primitive(p) => p.span(),
+            Self::Reference(r) => r.span(),
+            Self::Void(s) => *s,
         }
     }
 
     /// Check if this is the void type.
     pub fn is_void(&self) -> bool {
-        matches!(self, Type::Void(_))
+        matches!(self, Self::Void(_))
     }
 
     /// Check if this is a primitive type.
     pub fn is_primitive(&self) -> bool {
-        matches!(self, Type::Primitive(_))
+        matches!(self, Self::Primitive(_))
     }
 }
 
@@ -54,14 +54,14 @@ pub enum PrimitiveType {
 impl PrimitiveType {
     pub fn as_str(&self) -> &'static str {
         match self {
-            PrimitiveType::Byte => "byte",
-            PrimitiveType::Short => "short",
-            PrimitiveType::Int => "int",
-            PrimitiveType::Long => "long",
-            PrimitiveType::Char => "char",
-            PrimitiveType::Float => "float",
-            PrimitiveType::Double => "double",
-            PrimitiveType::Boolean => "boolean",
+            Self::Byte => "byte",
+            Self::Short => "short",
+            Self::Int => "int",
+            Self::Long => "long",
+            Self::Char => "char",
+            Self::Float => "float",
+            Self::Double => "double",
+            Self::Boolean => "boolean",
         }
     }
 
@@ -84,9 +84,9 @@ pub enum ReferenceType {
 impl ReferenceType {
     pub fn span(&self) -> Span {
         match self {
-            ReferenceType::ClassOrInterfaceType(t) => t.span(),
-            ReferenceType::TypeVar(i) => i.span(),
-            ReferenceType::Array(a) => a.span,
+            Self::ClassOrInterfaceType(t) => t.span(),
+            Self::TypeVar(i) => i.span(),
+            Self::Array(a) => a.span,
         }
     }
 }

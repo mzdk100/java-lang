@@ -22,6 +22,8 @@ impl Parse for CompilationUnit {
 
         while !input.is_empty() {
             if input.is(&TokenKind::Semicolon) {
+                // Drain any pending comments (they precede this semicolon)
+                input.collect_pending_comments();
                 let sp = input.peek().span;
                 input.next();
                 type_decls.push(TypeDecl::Empty(sp));
@@ -41,19 +43,41 @@ impl Parse for CompilationUnit {
                 imports.push(input.parse()?);
                 continue;
             }
+            // Collect doc comments before the declaration
+            let doc_comment = input.collect_pending_doc_comments();
             if input.is_ident("module") || input.is(&TokenKind::Open) {
-                module = Some(input.parse()?);
+                let mut mod_decl: ModuleDecl = input.parse()?;
+                mod_decl.doc_comment = doc_comment;
+                module = Some(mod_decl);
                 continue;
             }
-            type_decls.push(input.parse()?);
+            // Type declaration
+            let mut type_decl: TypeDecl = input.parse()?;
+            set_type_decl_doc_comment(&mut type_decl, doc_comment);
+            type_decls.push(type_decl);
         }
 
+        // Collect any remaining comments at the end of the file
+        let comments = input.collect_pending_comments();
+
         Ok(Self {
+            comments,
             package,
             imports,
             type_decls,
             module,
         })
+    }
+}
+
+fn set_type_decl_doc_comment(decl: &mut TypeDecl, doc_comment: Vec<Comment>) {
+    match decl {
+        TypeDecl::Class(c) => c.doc_comment = doc_comment,
+        TypeDecl::Interface(i) => i.doc_comment = doc_comment,
+        TypeDecl::Enum(e) => e.doc_comment = doc_comment,
+        TypeDecl::Record(r) => r.doc_comment = doc_comment,
+        TypeDecl::AnnotationType(a) => a.doc_comment = doc_comment,
+        TypeDecl::Empty(_) => {}
     }
 }
 
@@ -177,6 +201,7 @@ impl Parse for ModuleDecl {
         input.expect(TokenKind::RBrace)?;
         let brace_end = input.peek().span;
         Ok(Self {
+            doc_comment: Vec::new(),
             annotations,
             open_span,
             module_span,
@@ -303,19 +328,19 @@ impl Parse for TypeDecl {
 
         match &input.peek().kind {
             TokenKind::Class => {
-                let decl: ClassDecl = parse_class_decl(input, modifiers)?;
+                let decl: ClassDecl = parse_class_decl(input, Vec::new(), modifiers)?;
                 Ok(Self::Class(decl))
             }
             TokenKind::Interface => {
-                let decl: InterfaceDecl = parse_interface_decl(input, modifiers)?;
+                let decl: InterfaceDecl = parse_interface_decl(input, Vec::new(), modifiers)?;
                 Ok(Self::Interface(decl))
             }
             TokenKind::Enum => {
-                let decl: EnumDecl = parse_enum_decl(input, modifiers)?;
+                let decl: EnumDecl = parse_enum_decl(input, Vec::new(), modifiers)?;
                 Ok(Self::Enum(decl))
             }
             TokenKind::Record => {
-                let decl: RecordDecl = parse_record_decl(input, modifiers)?;
+                let decl: RecordDecl = parse_record_decl(input, Vec::new(), modifiers)?;
                 Ok(Self::Record(decl))
             }
             TokenKind::At => {
@@ -328,6 +353,7 @@ impl Parse for TypeDecl {
                     let name = input.parse_ident()?;
                     let body = parse_annotation_type_body(input)?;
                     return Ok(Self::AnnotationType(AnnotationInterfaceDecl {
+                        doc_comment: Vec::new(),
                         modifiers,
                         at_span,
                         interface_span: name.span(),
@@ -343,19 +369,19 @@ impl Parse for TypeDecl {
                 all_mods.push(Modifier::Annotation(ann));
                 match &input.peek().kind {
                     TokenKind::Class => {
-                        let decl = parse_class_decl(input, all_mods)?;
+                        let decl = parse_class_decl(input, Vec::new(), all_mods)?;
                         Ok(Self::Class(decl))
                     }
                     TokenKind::Interface => {
-                        let decl = parse_interface_decl(input, all_mods)?;
+                        let decl = parse_interface_decl(input, Vec::new(), all_mods)?;
                         Ok(Self::Interface(decl))
                     }
                     TokenKind::Enum => {
-                        let decl = parse_enum_decl(input, all_mods)?;
+                        let decl = parse_enum_decl(input, Vec::new(), all_mods)?;
                         Ok(Self::Enum(decl))
                     }
                     TokenKind::Record => {
-                        let decl = parse_record_decl(input, all_mods)?;
+                        let decl = parse_record_decl(input, Vec::new(), all_mods)?;
                         Ok(Self::Record(decl))
                     }
                     _ => Err(crate::error::Error::new(
@@ -623,7 +649,11 @@ fn parse_array_init(input: &ParseStream) -> Result<ArrayInitExpr> {
 // ClassDecl
 // ============================================================================
 
-fn parse_class_decl(input: &ParseStream, modifiers: Vec<Modifier>) -> Result<ClassDecl> {
+fn parse_class_decl(
+    input: &ParseStream,
+    doc_comment: Vec<Comment>,
+    modifiers: Vec<Modifier>,
+) -> Result<ClassDecl> {
     let class_span = input.peek().span;
     input.expect(TokenKind::Class)?;
     let name = input.parse_ident()?;
@@ -651,6 +681,7 @@ fn parse_class_decl(input: &ParseStream, modifiers: Vec<Modifier>) -> Result<Cla
     };
     let body = parse_class_body_decl_list(input)?;
     Ok(ClassDecl {
+        doc_comment,
         modifiers,
         class_span,
         name,
@@ -666,7 +697,10 @@ fn parse_class_body_decl_list(input: &ParseStream) -> Result<ClassBodyDeclList> 
     input.expect(TokenKind::LBrace)?;
     let open = input.peek().span;
     let mut declarations = Vec::new();
-    while !input.is(&TokenKind::RBrace) && !input.is_empty() {
+    while !input.is_empty() {
+        if input.is(&TokenKind::RBrace) {
+            break;
+        }
         if input.is(&TokenKind::Semicolon) {
             let sp = input.next().span;
             declarations.push(ClassBodyDecl::Empty(sp));
@@ -674,8 +708,8 @@ fn parse_class_body_decl_list(input: &ParseStream) -> Result<ClassBodyDeclList> 
         }
         declarations.push(parse_class_body_decl(input)?);
     }
-    input.expect(TokenKind::RBrace)?;
     let close = input.peek().span;
+    input.expect(TokenKind::RBrace)?;
     Ok(ClassBodyDeclList {
         brace_span: (open, close),
         declarations,
@@ -683,11 +717,12 @@ fn parse_class_body_decl_list(input: &ParseStream) -> Result<ClassBodyDeclList> 
 }
 
 fn parse_class_body_decl(input: &ParseStream) -> Result<ClassBodyDecl> {
+    let doc_comment = input.collect_pending_doc_comments();
     let modifiers = parse_modifiers(input);
 
     match &input.peek().kind {
         TokenKind::LBrace => {
-            let block = parse_block(input)?;
+            let block = parse_block(input, Vec::new())?;
             Ok(ClassBodyDecl::InstanceInit(InstanceInit { block }))
         }
         TokenKind::Static => {
@@ -695,30 +730,30 @@ fn parse_class_body_decl(input: &ParseStream) -> Result<ClassBodyDecl> {
             let static_span = input.peek().span;
             input.next();
             if input.is(&TokenKind::LBrace) {
-                let block = parse_block(input)?;
+                let block = parse_block(input, Vec::new())?;
                 Ok(ClassBodyDecl::StaticInit(StaticInit { static_span, block }))
             } else {
                 let mut rest_mods = modifiers;
                 rest_mods.push(Modifier::Static(static_span));
                 let rest = parse_modifiers(input);
                 rest_mods.extend(rest);
-                parse_class_member(input, rest_mods)
+                parse_class_member(input, doc_comment.clone(), rest_mods)
             }
         }
         TokenKind::Class => {
-            let decl = parse_class_decl(input, modifiers)?;
+            let decl = parse_class_decl(input, doc_comment, modifiers)?;
             Ok(ClassBodyDecl::Class(decl))
         }
         TokenKind::Interface => {
-            let decl = parse_interface_decl(input, modifiers)?;
+            let decl = parse_interface_decl(input, doc_comment, modifiers)?;
             Ok(ClassBodyDecl::Interface(decl))
         }
         TokenKind::Enum => {
-            let decl = parse_enum_decl(input, modifiers)?;
+            let decl = parse_enum_decl(input, doc_comment, modifiers)?;
             Ok(ClassBodyDecl::Enum(decl))
         }
         TokenKind::Record => {
-            let decl = parse_record_decl(input, modifiers)?;
+            let decl = parse_record_decl(input, doc_comment, modifiers)?;
             Ok(ClassBodyDecl::Record(decl))
         }
         TokenKind::At => {
@@ -731,6 +766,7 @@ fn parse_class_body_decl(input: &ParseStream) -> Result<ClassBodyDecl> {
                 let name = input.parse_ident()?;
                 let body = parse_annotation_type_body(input)?;
                 Ok(ClassBodyDecl::AnnotationType(AnnotationInterfaceDecl {
+                    doc_comment,
                     modifiers,
                     at_span,
                     interface_span: name.span(),
@@ -739,14 +775,18 @@ fn parse_class_body_decl(input: &ParseStream) -> Result<ClassBodyDecl> {
                 }))
             } else {
                 input.set_cursor(saved);
-                parse_class_member(input, modifiers)
+                parse_class_member(input, doc_comment.clone(), modifiers)
             }
         }
-        _ => parse_class_member(input, modifiers),
+        _ => parse_class_member(input, doc_comment, modifiers),
     }
 }
 
-fn parse_class_member(input: &ParseStream, modifiers: Vec<Modifier>) -> Result<ClassBodyDecl> {
+fn parse_class_member(
+    input: &ParseStream,
+    doc_comment: Vec<Comment>,
+    modifiers: Vec<Modifier>,
+) -> Result<ClassBodyDecl> {
     let type_params = parse_optional_type_params(input);
 
     // Parse the return type (or constructor name)
@@ -769,6 +809,7 @@ fn parse_class_member(input: &ParseStream, modifiers: Vec<Modifier>) -> Result<C
         let throws_clause = parse_throws_clause(input)?;
         let body = parse_constructor_body(input)?;
         return Ok(ClassBodyDecl::Constructor(ConstructorDecl {
+            doc_comment,
             modifiers,
             type_params,
             name,
@@ -792,12 +833,13 @@ fn parse_class_member(input: &ParseStream, modifiers: Vec<Modifier>) -> Result<C
             let _trailing_dims = parse_array_dims(input)?;
             let throws_clause = parse_throws_clause(input)?;
             let body = if input.is(&TokenKind::LBrace) {
-                Some(parse_block(input)?)
+                Some(parse_block(input, Vec::new())?)
             } else {
                 input.expect(TokenKind::Semicolon)?;
                 None
             };
             return Ok(ClassBodyDecl::Method(MethodDecl {
+                doc_comment,
                 modifiers,
                 type_params,
                 return_type: MethodReturnType::Type(ty),
@@ -840,6 +882,7 @@ fn parse_class_member(input: &ParseStream, modifiers: Vec<Modifier>) -> Result<C
         input.expect(TokenKind::Semicolon)?;
         let semi_span = input.peek().span;
         return Ok(ClassBodyDecl::Field(FieldDecl {
+            doc_comment,
             modifiers,
             ty,
             declarators,
@@ -933,7 +976,11 @@ fn parse_throws_clause(input: &ParseStream) -> Result<Option<ThrowsClause>> {
 // InterfaceDecl
 // ============================================================================
 
-fn parse_interface_decl(input: &ParseStream, modifiers: Vec<Modifier>) -> Result<InterfaceDecl> {
+fn parse_interface_decl(
+    input: &ParseStream,
+    doc_comment: Vec<Comment>,
+    modifiers: Vec<Modifier>,
+) -> Result<InterfaceDecl> {
     let interface_span = input.peek().span;
     input.expect(TokenKind::Interface)?;
     let name = input.parse_ident()?;
@@ -964,7 +1011,10 @@ fn parse_interface_decl(input: &ParseStream, modifiers: Vec<Modifier>) -> Result
     input.expect(TokenKind::LBrace)?;
     let open = input.peek().span;
     let mut members = Vec::new();
-    while !input.is(&TokenKind::RBrace) && !input.is_empty() {
+    while !input.is_empty() {
+        if input.is(&TokenKind::RBrace) {
+            break;
+        }
         if input.is(&TokenKind::Semicolon) {
             let sp = input.next().span;
             members.push(InterfaceMemberDecl::Empty(sp));
@@ -976,6 +1026,7 @@ fn parse_interface_decl(input: &ParseStream, modifiers: Vec<Modifier>) -> Result
     let close = input.peek().span;
 
     Ok(InterfaceDecl {
+        doc_comment,
         modifiers,
         interface_span,
         name,
@@ -990,23 +1041,24 @@ fn parse_interface_decl(input: &ParseStream, modifiers: Vec<Modifier>) -> Result
 }
 
 fn parse_interface_member_decl(input: &ParseStream) -> Result<InterfaceMemberDecl> {
+    let doc_comment = input.collect_pending_doc_comments();
     let modifiers = parse_modifiers(input);
 
     match &input.peek().kind {
         TokenKind::Class => {
-            let decl = parse_class_decl(input, modifiers)?;
+            let decl = parse_class_decl(input, doc_comment, modifiers)?;
             Ok(InterfaceMemberDecl::Class(decl))
         }
         TokenKind::Interface => {
-            let decl = parse_interface_decl(input, modifiers)?;
+            let decl = parse_interface_decl(input, doc_comment, modifiers)?;
             Ok(InterfaceMemberDecl::Interface(decl))
         }
         TokenKind::Enum => {
-            let decl = parse_enum_decl(input, modifiers)?;
+            let decl = parse_enum_decl(input, doc_comment, modifiers)?;
             Ok(InterfaceMemberDecl::Enum(decl))
         }
         TokenKind::Record => {
-            let decl = parse_record_decl(input, modifiers)?;
+            let decl = parse_record_decl(input, doc_comment, modifiers)?;
             Ok(InterfaceMemberDecl::Record(decl))
         }
         TokenKind::At => {
@@ -1020,6 +1072,7 @@ fn parse_interface_member_decl(input: &ParseStream) -> Result<InterfaceMemberDec
                 let body = parse_annotation_type_body(input)?;
                 Ok(InterfaceMemberDecl::AnnotationInterface(
                     AnnotationInterfaceDecl {
+                        doc_comment,
                         modifiers,
                         at_span,
                         interface_span: name.span(),
@@ -1029,15 +1082,16 @@ fn parse_interface_member_decl(input: &ParseStream) -> Result<InterfaceMemberDec
                 ))
             } else {
                 input.set_cursor(saved);
-                parse_interface_field_or_method(input, modifiers)
+                parse_interface_field_or_method(input, doc_comment, modifiers)
             }
         }
-        _ => parse_interface_field_or_method(input, modifiers),
+        _ => parse_interface_field_or_method(input, doc_comment, modifiers),
     }
 }
 
 fn parse_interface_field_or_method(
     input: &ParseStream,
+    doc_comment: Vec<Comment>,
     modifiers: Vec<Modifier>,
 ) -> Result<InterfaceMemberDecl> {
     let type_params = parse_optional_type_params(input);
@@ -1051,12 +1105,13 @@ fn parse_interface_field_or_method(
             let params = parse_formal_params_after_lparen(input)?;
             let throws_clause = parse_throws_clause(input)?;
             let body = if input.is(&TokenKind::LBrace) {
-                Some(parse_block(input)?)
+                Some(parse_block(input, Vec::new())?)
             } else {
                 input.expect(TokenKind::Semicolon)?;
                 None
             };
             Ok(InterfaceMemberDecl::Method(MethodDecl {
+                doc_comment,
                 modifiers,
                 type_params,
                 return_type: MethodReturnType::Type(ty),
@@ -1098,6 +1153,7 @@ fn parse_interface_field_or_method(
             input.expect(TokenKind::Semicolon)?;
             let semi_span = input.peek().span;
             Ok(InterfaceMemberDecl::Field(FieldDecl {
+                doc_comment,
                 modifiers,
                 ty,
                 declarators,
@@ -1116,7 +1172,11 @@ fn parse_interface_field_or_method(
 // EnumDecl
 // ============================================================================
 
-fn parse_enum_decl(input: &ParseStream, modifiers: Vec<Modifier>) -> Result<EnumDecl> {
+fn parse_enum_decl(
+    input: &ParseStream,
+    doc_comment: Vec<Comment>,
+    modifiers: Vec<Modifier>,
+) -> Result<EnumDecl> {
     let enum_span = input.peek().span;
     input.expect(TokenKind::Enum)?;
     let name = input.parse_ident()?;
@@ -1161,7 +1221,10 @@ fn parse_enum_decl(input: &ParseStream, modifiers: Vec<Modifier>) -> Result<Enum
 
     let members = if input.eat(&TokenKind::Semicolon) {
         let mut members = Vec::new();
-        while !input.is(&TokenKind::RBrace) && !input.is_empty() {
+        while !input.is_empty() {
+            if input.is(&TokenKind::RBrace) {
+                break;
+            }
             if input.is(&TokenKind::Semicolon) {
                 let sp = input.next().span;
                 members.push(ClassBodyDecl::Empty(sp));
@@ -1178,6 +1241,7 @@ fn parse_enum_decl(input: &ParseStream, modifiers: Vec<Modifier>) -> Result<Enum
     let close = input.peek().span;
 
     Ok(EnumDecl {
+        doc_comment,
         modifiers,
         enum_span,
         name,
@@ -1195,7 +1259,11 @@ fn parse_enum_decl(input: &ParseStream, modifiers: Vec<Modifier>) -> Result<Enum
 // RecordDecl
 // ============================================================================
 
-fn parse_record_decl(input: &ParseStream, modifiers: Vec<Modifier>) -> Result<RecordDecl> {
+fn parse_record_decl(
+    input: &ParseStream,
+    doc_comment: Vec<Comment>,
+    modifiers: Vec<Modifier>,
+) -> Result<RecordDecl> {
     let record_span = input.peek().span;
     input.expect(TokenKind::Record)?;
     let name = input.parse_ident()?;
@@ -1237,7 +1305,10 @@ fn parse_record_decl(input: &ParseStream, modifiers: Vec<Modifier>) -> Result<Re
     input.expect(TokenKind::LBrace)?;
     let open = input.peek().span;
     let mut members = Vec::new();
-    while !input.is(&TokenKind::RBrace) && !input.is_empty() {
+    while !input.is_empty() {
+        if input.is(&TokenKind::RBrace) {
+            break;
+        }
         if input.is(&TokenKind::Semicolon) {
             let sp = input.next().span;
             members.push(RecordBodyDecl::Empty(sp));
@@ -1249,6 +1320,7 @@ fn parse_record_decl(input: &ParseStream, modifiers: Vec<Modifier>) -> Result<Re
     let close = input.peek().span;
 
     Ok(RecordDecl {
+        doc_comment,
         modifiers,
         record_span,
         name,
@@ -1266,6 +1338,7 @@ fn parse_record_decl(input: &ParseStream, modifiers: Vec<Modifier>) -> Result<Re
 }
 
 fn parse_record_body_decl(input: &ParseStream) -> Result<RecordBodyDecl> {
+    let doc_comment = input.collect_pending_doc_comments();
     let modifiers = parse_modifiers(input);
 
     // Check for compact constructor
@@ -1276,6 +1349,7 @@ fn parse_record_body_decl(input: &ParseStream) -> Result<RecordBodyDecl> {
             if input.is(&TokenKind::LBrace) {
                 let body = parse_constructor_body(input)?;
                 return Ok(RecordBodyDecl::CompactConstructor(CompactConstructorDecl {
+                    doc_comment,
                     modifiers,
                     name,
                     body,
@@ -1289,14 +1363,14 @@ fn parse_record_body_decl(input: &ParseStream) -> Result<RecordBodyDecl> {
 
     match &input.peek().kind {
         TokenKind::LBrace => {
-            let block = parse_block(input)?;
+            let block = parse_block(input, Vec::new())?;
             Ok(RecordBodyDecl::InstanceInit(InstanceInit { block }))
         }
         TokenKind::Static => {
             let static_span = input.peek().span;
             input.next();
             if input.is(&TokenKind::LBrace) {
-                let block = parse_block(input)?;
+                let block = parse_block(input, Vec::new())?;
                 Ok(RecordBodyDecl::StaticInit(StaticInit {
                     static_span,
                     block,
@@ -1307,31 +1381,32 @@ fn parse_record_body_decl(input: &ParseStream) -> Result<RecordBodyDecl> {
                 let rest = parse_modifiers(input);
                 rest_mods.extend(rest);
                 // Re-parse as field/method
-                parse_record_body_decl_with_mods(input, rest_mods)
+                parse_record_body_decl_with_mods(input, doc_comment, rest_mods)
             }
         }
         TokenKind::Class => {
-            let decl = parse_class_decl(input, modifiers)?;
+            let decl = parse_class_decl(input, doc_comment, modifiers)?;
             Ok(RecordBodyDecl::Class(decl))
         }
         TokenKind::Interface => {
-            let decl = parse_interface_decl(input, modifiers)?;
+            let decl = parse_interface_decl(input, doc_comment, modifiers)?;
             Ok(RecordBodyDecl::Interface(decl))
         }
         TokenKind::Enum => {
-            let decl = parse_enum_decl(input, modifiers)?;
+            let decl = parse_enum_decl(input, doc_comment, modifiers)?;
             Ok(RecordBodyDecl::Enum(decl))
         }
         TokenKind::Record => {
-            let decl = parse_record_decl(input, modifiers)?;
+            let decl = parse_record_decl(input, doc_comment, modifiers)?;
             Ok(RecordBodyDecl::Record(decl))
         }
-        _ => parse_record_body_decl_with_mods(input, modifiers),
+        _ => parse_record_body_decl_with_mods(input, doc_comment, modifiers),
     }
 }
 
 fn parse_record_body_decl_with_mods(
     input: &ParseStream,
+    doc_comment: Vec<Comment>,
     modifiers: Vec<Modifier>,
 ) -> Result<RecordBodyDecl> {
     let type_params = parse_optional_type_params(input);
@@ -1344,12 +1419,13 @@ fn parse_record_body_decl_with_mods(
             let params = parse_formal_params_after_lparen(input)?;
             let throws_clause = parse_throws_clause(input)?;
             let body = if input.is(&TokenKind::LBrace) {
-                Some(parse_block(input)?)
+                Some(parse_block(input, Vec::new())?)
             } else {
                 input.expect(TokenKind::Semicolon)?;
                 None
             };
             return Ok(RecordBodyDecl::Method(MethodDecl {
+                doc_comment,
                 modifiers,
                 type_params,
                 return_type: MethodReturnType::Type(ty),
@@ -1390,6 +1466,7 @@ fn parse_record_body_decl_with_mods(
         input.expect(TokenKind::Semicolon)?;
         let semi_span = input.peek().span;
         Ok(RecordBodyDecl::Field(FieldDecl {
+            doc_comment,
             modifiers,
             ty,
             declarators,
@@ -1419,7 +1496,10 @@ fn parse_constructor_body(input: &ParseStream) -> Result<ConstructorBody> {
         }
     }
 
-    while !input.is(&TokenKind::RBrace) && !input.is_empty() {
+    while !input.is_empty() {
+        if input.is(&TokenKind::RBrace) {
+            break;
+        }
         stmts.push(parse_statement(input)?);
     }
     input.expect(TokenKind::RBrace)?;
@@ -1618,11 +1698,15 @@ fn parse_annotation_type_body(input: &ParseStream) -> Result<AnnotationInterface
     input.expect(TokenKind::LBrace)?;
     let open = input.peek().span;
     let mut members = Vec::new();
-    while !input.is(&TokenKind::RBrace) && !input.is_empty() {
+    while !input.is_empty() {
+        if input.is(&TokenKind::RBrace) {
+            break;
+        }
         if input.eat(&TokenKind::Semicolon) {
             members.push(AnnotationInterfaceMember::Empty(input.peek().span));
             continue;
         }
+        let doc_comment = input.collect_pending_doc_comments();
         let modifiers = parse_modifiers(input);
         let annotations = parse_annotations(input)?;
         let mut all_mods: Vec<Modifier> = annotations
@@ -1642,6 +1726,7 @@ fn parse_annotation_type_body(input: &ParseStream) -> Result<AnnotationInterface
                 let body = parse_annotation_type_body(input)?;
                 members.push(AnnotationInterfaceMember::AnnotationInterface(
                     AnnotationInterfaceDecl {
+                        doc_comment,
                         modifiers: all_mods,
                         at_span,
                         interface_span: name.span(),
@@ -1656,22 +1741,22 @@ fn parse_annotation_type_body(input: &ParseStream) -> Result<AnnotationInterface
 
         // Try class/interface/enum/record
         if input.is(&TokenKind::Class) {
-            let decl = parse_class_decl(input, all_mods)?;
+            let decl = parse_class_decl(input, doc_comment, all_mods)?;
             members.push(AnnotationInterfaceMember::Class(decl));
             continue;
         }
         if input.is(&TokenKind::Interface) {
-            let decl = parse_interface_decl(input, all_mods)?;
+            let decl = parse_interface_decl(input, doc_comment, all_mods)?;
             members.push(AnnotationInterfaceMember::Interface(decl));
             continue;
         }
         if input.is(&TokenKind::Enum) {
-            let decl = parse_enum_decl(input, all_mods)?;
+            let decl = parse_enum_decl(input, doc_comment, all_mods)?;
             members.push(AnnotationInterfaceMember::Enum(decl));
             continue;
         }
         if input.is(&TokenKind::Record) {
-            let decl: RecordDecl = parse_record_decl(input, all_mods)?;
+            let decl: RecordDecl = parse_record_decl(input, doc_comment, all_mods)?;
             members.push(AnnotationInterfaceMember::Record(decl));
             continue;
         }
@@ -1734,6 +1819,7 @@ fn parse_annotation_type_body(input: &ParseStream) -> Result<AnnotationInterface
             input.expect(TokenKind::Semicolon)?;
             let semi_span = input.peek().span;
             members.push(AnnotationInterfaceMember::Field(FieldDecl {
+                doc_comment,
                 modifiers: all_mods,
                 ty,
                 declarators,
@@ -1968,24 +2054,36 @@ fn parse_type_arguments(input: &ParseStream) -> Result<TypeArguments> {
 // Statements
 // ============================================================================
 
-fn parse_block(input: &ParseStream) -> Result<Block> {
+fn parse_block(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Block> {
     let open = input.peek().span;
     input.expect(TokenKind::LBrace)?;
     let mut stmts = Vec::new();
-    while !input.is(&TokenKind::RBrace) && !input.is_empty() {
+    while !input.is_empty() {
+        if input.is(&TokenKind::RBrace) {
+            break;
+        }
         stmts.push(parse_statement(input)?);
     }
     input.expect(TokenKind::RBrace)?;
     let close = input.peek().span;
     Ok(Block {
+        leading_comments,
         brace_span: (open, close),
         stmts,
     })
 }
 
 fn parse_statement(input: &ParseStream) -> Result<Stmt> {
+    let leading_comments = input.collect_pending_comments();
+    parse_statement_with_comments(input, leading_comments)
+}
+
+fn parse_statement_with_comments(
+    input: &ParseStream,
+    leading_comments: Vec<Comment>,
+) -> Result<Stmt> {
     if input.is(&TokenKind::LBrace) {
-        let block = parse_block(input)?;
+        let block = parse_block(input, leading_comments)?;
         return Ok(Stmt::Block(block));
     }
     if input.is(&TokenKind::Semicolon) {
@@ -1993,43 +2091,43 @@ fn parse_statement(input: &ParseStream) -> Result<Stmt> {
         return Ok(Stmt::Empty(sp));
     }
     if input.is(&TokenKind::If) {
-        return parse_if_stmt(input);
+        return parse_if_stmt(input, leading_comments);
     }
     if input.is(&TokenKind::Assert) {
-        return parse_assert_stmt(input);
+        return parse_assert_stmt(input, leading_comments);
     }
     if input.is(&TokenKind::Switch) {
-        return parse_switch_stmt(input);
+        return parse_switch_stmt(input, leading_comments);
     }
     if input.is(&TokenKind::While) {
-        return parse_while_stmt(input);
+        return parse_while_stmt(input, leading_comments);
     }
     if input.is(&TokenKind::Do) {
-        return parse_do_while_stmt(input);
+        return parse_do_while_stmt(input, leading_comments);
     }
     if input.is(&TokenKind::For) {
-        return parse_for_stmt(input);
+        return parse_for_stmt(input, leading_comments);
     }
     if input.is(&TokenKind::Break) {
-        return parse_jump_stmt(input, TokenKind::Break, Stmt::Break);
+        return parse_jump_stmt(input, TokenKind::Break, Stmt::Break, leading_comments);
     }
     if input.is(&TokenKind::Continue) {
-        return parse_jump_stmt(input, TokenKind::Continue, Stmt::Continue);
+        return parse_jump_stmt(input, TokenKind::Continue, Stmt::Continue, leading_comments);
     }
     if input.is(&TokenKind::Return) {
-        return parse_return_stmt(input);
+        return parse_return_stmt(input, leading_comments);
     }
     if input.is(&TokenKind::Throw) {
-        return parse_throw_stmt(input);
+        return parse_throw_stmt(input, leading_comments);
     }
     if input.is(&TokenKind::Synchronized) {
-        return parse_synchronized_stmt(input);
+        return parse_synchronized_stmt(input, leading_comments);
     }
     if input.is(&TokenKind::Try) {
-        return parse_try_stmt(input);
+        return parse_try_stmt(input, leading_comments);
     }
     if input.is(&TokenKind::Yield) {
-        return parse_yield_stmt(input);
+        return parse_yield_stmt(input, leading_comments);
     }
 
     // Check for labeled statement: Ident ':'
@@ -2042,6 +2140,7 @@ fn parse_statement(input: &ParseStream) -> Result<Stmt> {
                 input.next();
                 let stmt = parse_statement(input)?;
                 return Ok(Stmt::Labeled(LabeledStmt {
+                    leading_comments,
                     label: ident,
                     colon_span,
                     stmt: Box::new(stmt),
@@ -2085,7 +2184,7 @@ fn parse_statement(input: &ParseStream) -> Result<Stmt> {
     // Check for local variable declaration or expression statement
     // Local var decl starts with type, possibly with var
     let saved = input.cursor();
-    if let Some(stmt) = try_parse_local_var_decl_or_expr_stmt(input) {
+    if let Some(stmt) = try_parse_local_var_decl_or_expr_stmt(input, leading_comments.clone()) {
         return Ok(stmt);
     }
     input.set_cursor(saved);
@@ -2094,10 +2193,17 @@ fn parse_statement(input: &ParseStream) -> Result<Stmt> {
     let expr = parse_expression(input)?;
     input.expect(TokenKind::Semicolon)?;
     let semi_span = input.peek().span;
-    Ok(Stmt::Expr(ExprStmt { expr, semi_span }))
+    Ok(Stmt::Expr(ExprStmt {
+        leading_comments,
+        expr,
+        semi_span,
+    }))
 }
 
-fn try_parse_local_var_decl_or_expr_stmt(input: &ParseStream) -> Option<Stmt> {
+fn try_parse_local_var_decl_or_expr_stmt(
+    input: &ParseStream,
+    leading_comments: Vec<Comment>,
+) -> Option<Stmt> {
     let modifiers = parse_modifiers(input);
     let is_var = input.is(&TokenKind::Var);
     let can_start_type = crate::token::can_start_type(&input.peek().kind);
@@ -2144,6 +2250,7 @@ fn try_parse_local_var_decl_or_expr_stmt(input: &ParseStream) -> Option<Stmt> {
                 if input.eat(&TokenKind::Semicolon) {
                     let semi_span = input.peek().span;
                     return Some(Stmt::LocalVarDecl(LocalVarDeclStmt {
+                        leading_comments,
                         modifiers,
                         ty,
                         declarators,
@@ -2157,7 +2264,7 @@ fn try_parse_local_var_decl_or_expr_stmt(input: &ParseStream) -> Option<Stmt> {
     None
 }
 
-fn parse_if_stmt(input: &ParseStream) -> Result<Stmt> {
+fn parse_if_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let if_span = input.peek().span;
     input.expect(TokenKind::If)?;
     input.expect(TokenKind::LParen)?;
@@ -2174,6 +2281,7 @@ fn parse_if_stmt(input: &ParseStream) -> Result<Stmt> {
         None
     };
     Ok(Stmt::If(IfStmt {
+        leading_comments,
         if_span,
         paren_span: (open, close),
         cond,
@@ -2182,7 +2290,7 @@ fn parse_if_stmt(input: &ParseStream) -> Result<Stmt> {
     }))
 }
 
-fn parse_assert_stmt(input: &ParseStream) -> Result<Stmt> {
+fn parse_assert_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let assert_span = input.peek().span;
     input.expect(TokenKind::Assert)?;
     let cond = parse_expression(input)?;
@@ -2196,6 +2304,7 @@ fn parse_assert_stmt(input: &ParseStream) -> Result<Stmt> {
     input.expect(TokenKind::Semicolon)?;
     let semi_span = input.peek().span;
     Ok(Stmt::Assert(AssertStmt {
+        leading_comments,
         assert_span,
         cond,
         detail,
@@ -2203,7 +2312,7 @@ fn parse_assert_stmt(input: &ParseStream) -> Result<Stmt> {
     }))
 }
 
-fn parse_switch_stmt(input: &ParseStream) -> Result<Stmt> {
+fn parse_switch_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let switch_span = input.peek().span;
     input.expect(TokenKind::Switch)?;
     input.expect(TokenKind::LParen)?;
@@ -2214,7 +2323,10 @@ fn parse_switch_stmt(input: &ParseStream) -> Result<Stmt> {
     input.expect(TokenKind::LBrace)?;
     let brace_open = input.peek().span;
     let mut cases = Vec::new();
-    while !input.is(&TokenKind::RBrace) && !input.is_empty() {
+    while !input.is_empty() {
+        if input.is(&TokenKind::RBrace) {
+            break;
+        }
         let labels = parse_switch_labels(input)?;
         let colon_span = if input.eat(&TokenKind::Colon) || input.eat(&TokenKind::Arrow) {
             input.peek().span
@@ -2222,7 +2334,10 @@ fn parse_switch_stmt(input: &ParseStream) -> Result<Stmt> {
             break;
         };
         let mut stmts = Vec::new();
-        while !is_switch_label_start(input) && !input.is(&TokenKind::RBrace) && !input.is_empty() {
+        while !input.is_empty() {
+            if is_switch_label_start(input) || input.is(&TokenKind::RBrace) {
+                break;
+            }
             stmts.push(parse_statement(input)?);
         }
         cases.push(SwitchCaseGroup {
@@ -2234,6 +2349,7 @@ fn parse_switch_stmt(input: &ParseStream) -> Result<Stmt> {
     input.expect(TokenKind::RBrace)?;
     let brace_close = input.peek().span;
     Ok(Stmt::Switch(SwitchStmt {
+        leading_comments,
         switch_span,
         paren_span: (open, close),
         selector,
@@ -2402,7 +2518,7 @@ fn parse_switch_labels(input: &ParseStream) -> Result<Vec<SwitchCase>> {
     Ok(labels)
 }
 
-fn parse_while_stmt(input: &ParseStream) -> Result<Stmt> {
+fn parse_while_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let while_span = input.peek().span;
     input.expect(TokenKind::While)?;
     input.expect(TokenKind::LParen)?;
@@ -2412,6 +2528,7 @@ fn parse_while_stmt(input: &ParseStream) -> Result<Stmt> {
     let close = input.peek().span;
     let body = parse_statement(input)?;
     Ok(Stmt::While(WhileStmt {
+        leading_comments,
         while_span,
         paren_span: (open, close),
         cond,
@@ -2419,7 +2536,7 @@ fn parse_while_stmt(input: &ParseStream) -> Result<Stmt> {
     }))
 }
 
-fn parse_do_while_stmt(input: &ParseStream) -> Result<Stmt> {
+fn parse_do_while_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let do_span = input.peek().span;
     input.expect(TokenKind::Do)?;
     let body = parse_statement(input)?;
@@ -2433,6 +2550,7 @@ fn parse_do_while_stmt(input: &ParseStream) -> Result<Stmt> {
     input.expect(TokenKind::Semicolon)?;
     let semi_span = input.peek().span;
     Ok(Stmt::DoWhile(DoWhileStmt {
+        leading_comments,
         do_span,
         body: Box::new(body),
         while_span,
@@ -2442,7 +2560,7 @@ fn parse_do_while_stmt(input: &ParseStream) -> Result<Stmt> {
     }))
 }
 
-fn parse_for_stmt(input: &ParseStream) -> Result<Stmt> {
+fn parse_for_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let for_span = input.peek().span;
     input.expect(TokenKind::For)?;
     input.expect(TokenKind::LParen)?;
@@ -2453,7 +2571,7 @@ fn parse_for_stmt(input: &ParseStream) -> Result<Stmt> {
     let saved = input.cursor();
 
     // Try enhanced for
-    if let Some(stmt) = try_parse_enhanced_for(for_span, open, input) {
+    if let Some(stmt) = try_parse_enhanced_for(for_span, open, input, leading_comments.clone()) {
         return Ok(stmt);
     }
     input.set_cursor(saved);
@@ -2500,6 +2618,7 @@ fn parse_for_stmt(input: &ParseStream) -> Result<Stmt> {
     let body = parse_statement(input)?;
 
     Ok(Stmt::For(ForStmt {
+        leading_comments,
         for_span,
         paren_span: (open, close),
         init,
@@ -2557,6 +2676,7 @@ fn try_parse_local_var_decl(input: &ParseStream) -> Option<LocalVarDeclStmt> {
             if input.eat(&TokenKind::Semicolon) {
                 let semi_span = input.peek().span;
                 return Some(LocalVarDeclStmt {
+                    leading_comments: Vec::new(),
                     modifiers,
                     ty,
                     declarators,
@@ -2569,7 +2689,12 @@ fn try_parse_local_var_decl(input: &ParseStream) -> Option<LocalVarDeclStmt> {
     None
 }
 
-fn try_parse_enhanced_for(for_span: Span, open: Span, input: &ParseStream) -> Option<Stmt> {
+fn try_parse_enhanced_for(
+    for_span: Span,
+    open: Span,
+    input: &ParseStream,
+    leading_comments: Vec<Comment>,
+) -> Option<Stmt> {
     let modifiers = parse_modifiers(input);
     let is_var = input.is(&TokenKind::Var);
     let can_start = crate::token::can_start_type(&input.peek().kind);
@@ -2600,9 +2725,11 @@ fn try_parse_enhanced_for(for_span: Span, open: Span, input: &ParseStream) -> Op
             let close = input.peek().span;
             let body = parse_statement(input).ok()?;
             return Some(Stmt::EnhancedFor(EnhancedForStmt {
+                leading_comments,
                 for_span,
                 paren_span: (open, close),
                 var_decl: LocalVarDeclStmt {
+                    leading_comments: Vec::new(),
                     modifiers,
                     ty,
                     declarators: vec![VariableDeclarator {
@@ -2626,6 +2753,7 @@ fn parse_jump_stmt(
     input: &ParseStream,
     keyword: TokenKind,
     make_stmt: fn(JumpStmt) -> Stmt,
+    leading_comments: Vec<Comment>,
 ) -> Result<Stmt> {
     let keyword_span = input.peek().span;
     input.expect(keyword)?;
@@ -2644,13 +2772,14 @@ fn parse_jump_stmt(
     input.expect(TokenKind::Semicolon)?;
     let semi_span = input.peek().span;
     Ok(make_stmt(JumpStmt {
+        leading_comments,
         keyword_span,
         label,
         semi_span,
     }))
 }
 
-fn parse_return_stmt(input: &ParseStream) -> Result<Stmt> {
+fn parse_return_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let return_span = input.peek().span;
     input.expect(TokenKind::Return)?;
     let value = if input.is(&TokenKind::Semicolon) {
@@ -2661,26 +2790,28 @@ fn parse_return_stmt(input: &ParseStream) -> Result<Stmt> {
     input.expect(TokenKind::Semicolon)?;
     let semi_span = input.peek().span;
     Ok(Stmt::Return(ReturnStmt {
+        leading_comments,
         return_span,
         value,
         semi_span,
     }))
 }
 
-fn parse_throw_stmt(input: &ParseStream) -> Result<Stmt> {
+fn parse_throw_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let throw_span = input.peek().span;
     input.expect(TokenKind::Throw)?;
     let expr = parse_expression(input)?;
     input.expect(TokenKind::Semicolon)?;
     let semi_span = input.peek().span;
     Ok(Stmt::Throw(ThrowStmt {
+        leading_comments,
         throw_span,
         expr,
         semi_span,
     }))
 }
 
-fn parse_synchronized_stmt(input: &ParseStream) -> Result<Stmt> {
+fn parse_synchronized_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let synchronized_span = input.peek().span;
     input.expect(TokenKind::Synchronized)?;
     input.expect(TokenKind::LParen)?;
@@ -2688,8 +2819,9 @@ fn parse_synchronized_stmt(input: &ParseStream) -> Result<Stmt> {
     let lock = parse_expression(input)?;
     input.expect(TokenKind::RParen)?;
     let close = input.peek().span;
-    let body = parse_block(input)?;
+    let body = parse_block(input, Vec::new())?;
     Ok(Stmt::Synchronized(SynchronizedStmt {
+        leading_comments,
         synchronized_span,
         paren_span: (open, close),
         lock,
@@ -2697,7 +2829,7 @@ fn parse_synchronized_stmt(input: &ParseStream) -> Result<Stmt> {
     }))
 }
 
-fn parse_try_stmt(input: &ParseStream) -> Result<Stmt> {
+fn parse_try_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let try_span = input.peek().span;
     input.expect(TokenKind::Try)?;
 
@@ -2736,6 +2868,7 @@ fn parse_try_stmt(input: &ParseStream) -> Result<Stmt> {
                         initializer,
                     }];
                     resources.push(TryResource::Decl(LocalVarDeclStmt {
+                        leading_comments: Vec::new(),
                         modifiers,
                         ty,
                         declarators,
@@ -2762,10 +2895,11 @@ fn parse_try_stmt(input: &ParseStream) -> Result<Stmt> {
         }
         input.expect(TokenKind::RParen)?;
         let close = input.peek().span;
-        let block = parse_block(input)?;
+        let block = parse_block(input, Vec::new())?;
         let catches = parse_catch_clauses(input)?;
         let finally_block = parse_finally_clause(input);
         Ok(Stmt::Try(TryStmt::TryWithResources {
+            leading_comments,
             try_span,
             paren_span: (open, close),
             resources,
@@ -2774,10 +2908,11 @@ fn parse_try_stmt(input: &ParseStream) -> Result<Stmt> {
             finally_block,
         }))
     } else {
-        let block = parse_block(input)?;
+        let block = parse_block(input, Vec::new())?;
         let catches = parse_catch_clauses(input)?;
         let finally_block = parse_finally_clause(input);
         Ok(Stmt::Try(TryStmt::Basic {
+            leading_comments,
             try_span,
             block,
             catches,
@@ -2802,7 +2937,7 @@ fn parse_catch_clauses(input: &ParseStream) -> Result<Vec<CatchClause>> {
         let name = input.parse_ident()?;
         input.expect(TokenKind::RParen).ok();
         let close = input.peek().span;
-        let block = parse_block(input)?;
+        let block = parse_block(input, Vec::new())?;
         clauses.push(CatchClause {
             catch_span,
             paren_span: (open, close),
@@ -2820,20 +2955,21 @@ fn parse_catch_clauses(input: &ParseStream) -> Result<Vec<CatchClause>> {
 fn parse_finally_clause(input: &ParseStream) -> Option<(Span, Block)> {
     if input.eat(&TokenKind::Finally) {
         let finally_span = input.peek().span;
-        let block = parse_block(input).ok()?;
+        let block = parse_block(input, Vec::new()).ok()?;
         Some((finally_span, block))
     } else {
         None
     }
 }
 
-fn parse_yield_stmt(input: &ParseStream) -> Result<Stmt> {
+fn parse_yield_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let yield_span = input.peek().span;
     input.expect(TokenKind::Yield)?;
     let value = parse_expression(input)?;
     input.expect(TokenKind::Semicolon)?;
     let semi_span = input.peek().span;
     Ok(Stmt::Yield(YieldStmt {
+        leading_comments,
         yield_span,
         value,
         semi_span,
@@ -3763,7 +3899,7 @@ fn parse_lambda_params_after_lparen(input: &ParseStream) -> Result<LambdaParams>
 
 fn parse_lambda_body(input: &ParseStream) -> Result<LambdaBody> {
     if input.is(&TokenKind::LBrace) {
-        Ok(LambdaBody::Block(parse_block(input)?))
+        Ok(LambdaBody::Block(parse_block(input, Vec::new())?))
     } else {
         Ok(LambdaBody::Expr(Box::new(parse_expression(input)?)))
     }
@@ -3929,7 +4065,7 @@ fn parse_switch_arm(input: &ParseStream) -> Result<SwitchArm> {
             input.expect(TokenKind::Semicolon)?;
             Ok(SwitchArm::Throw(label, arrow, expr))
         } else if input.is(&TokenKind::LBrace) {
-            let block = parse_block(input)?;
+            let block = parse_block(input, Vec::new())?;
             Ok(SwitchArm::Block(label, arrow, block))
         } else {
             let expr = parse_expression(input)?;
@@ -3939,7 +4075,10 @@ fn parse_switch_arm(input: &ParseStream) -> Result<SwitchArm> {
     } else {
         input.expect(TokenKind::Colon)?;
         let mut stmts = Vec::new();
-        while !is_switch_label_start(input) && !input.is(&TokenKind::RBrace) && !input.is_empty() {
+        while !input.is_empty() {
+            if is_switch_label_start(input) || input.is(&TokenKind::RBrace) {
+                break;
+            }
             stmts.push(parse_statement(input)?);
         }
         Ok(SwitchArm::Colon(label, stmts))

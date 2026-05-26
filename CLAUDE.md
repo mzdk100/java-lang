@@ -20,7 +20,7 @@ The crate has three layers: lexing, parsing infrastructure, and AST types.
 
 ### Lexing pipeline
 
-`lexer.rs` tokenizes Java source into `Vec<Token>`. Each `Token` holds a `TokenKind` (defined in `token.rs`) and a `Span` (byte offset range from `span.rs`). The lexer handles all Java literals, operators, keywords, and comments. `true`/`false`/`null` are literal tokens, not identifiers.
+`lexer.rs` tokenizes Java source into `Vec<Token>`. Each `Token` holds a `TokenKind` (defined in `token.rs`) and a `Span` (byte offset range from `span.rs`). The lexer handles all Java literals, operators, keywords, and comments. Comment tokens are emitted into the stream: `LineComment`, `BlockComment`, `DocLineComment` (`///`), `DocBlockComment` (`/** */`). `true`/`false`/`null` are literal tokens, not identifiers.
 
 ### Parse trait and ParseStream
 
@@ -31,6 +31,7 @@ Key `ParseStream` capabilities:
 - `split_gt` for `>>`/`>>>` token splitting in nested generics
 - `parse_ident` accepts both real identifiers and contextual keywords
 - Combinators: `parse_terminated`, `parse_separated`, `parse_parenthesized`, `parse_braced`, `parse_bracketed`
+- Comment handling: `peek()`/`advance()` transparently skip comment tokens, buffering them for collection via `collect_pending_doc_comments()` and `collect_pending_comments()`
 
 Top-level entry points: `parse_str`, `parse`, `parse_file`.
 
@@ -44,6 +45,7 @@ All AST nodes live in `src/ast/`. The public module structure:
 
 | File | Key types |
 |------|-----------|
+| `mod.rs` | `Comment`, `CommentKind` |
 | `compilation_unit.rs` | `CompilationUnit`, `PackageDecl`, `ImportDecl` |
 | `item.rs` | `TypeDecl`, `ClassDecl`, `InterfaceDecl`, `EnumDecl`, `RecordDecl`, `ModuleDecl`, `Modifier`, `ClassBodyDecl`, `MethodDecl`, `ConstructorDecl`, `FormalParameter` |
 | `expr.rs` | `Expr` (20 variants), `MethodCallExpr`, `FieldAccessExpr`, `LambdaExpr`, `SwitchExpr`, `NewClassExpr` |
@@ -67,3 +69,4 @@ All AST nodes live in `src/ast/`. The public module structure:
 - **Numeric literal values are stored as raw strings** (preserving hex, binary, octal, underscores, suffixes) to avoid precision loss.
 - **`>>`/`>>>` splitting**: `ParseStream.pending_gts` counter handles nested generics like `List<Map<String, Integer>>`.
 - **Speculative parsing**: `try_parse` with state save/restore is used extensively for ambiguous grammar (e.g., cast vs. lambda vs. parenthesized expression).
+- **Comment parsing**: Comments are emitted as tokens by the lexer. `ParseStream` skips them transparently and buffers them in `pending_comments`. The parser collects doc comments before declarations (`collect_pending_doc_comments()`) and regular comments before statements (`collect_pending_comments()`). Doc comments attach to items via `doc_comment: Vec<Comment>`, regular comments attach to statements via `leading_comments: Vec<Comment>`.

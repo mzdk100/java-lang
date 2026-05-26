@@ -14,8 +14,8 @@ pub enum Pattern {
 impl Pattern {
     pub fn span(&self) -> Span {
         match self {
-            Pattern::TypePattern(p) => p.span,
-            Pattern::RecordPattern(p) => p.span,
+            Self::TypePattern(p) => p.span,
+            Self::RecordPattern(p) => p.span,
         }
     }
 }

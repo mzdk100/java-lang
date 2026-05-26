@@ -157,6 +157,12 @@ pub enum TokenKind {
     GtGtEq,     // >>=
     GtGtGtEq,   // >>>=
 
+    // Comments
+    LineComment(String),     // // ...
+    BlockComment(String),    // /* ... */
+    DocLineComment(String),  // /// ...
+    DocBlockComment(String), // /** ... */
+
     // End of input
     Eof,
 }
@@ -293,6 +299,10 @@ impl fmt::Display for TokenKind {
             Self::LtLtEq => write!(f, "<<="),
             Self::GtGtEq => write!(f, ">>="),
             Self::GtGtGtEq => write!(f, ">>>="),
+            Self::LineComment(s) => write!(f, "{}", s),
+            Self::BlockComment(s) => write!(f, "{}", s),
+            Self::DocLineComment(s) => write!(f, "{}", s),
+            Self::DocBlockComment(s) => write!(f, "{}", s),
             Self::Eof => write!(f, "<eof>"),
         }
     }
@@ -305,6 +315,10 @@ impl Hash for TokenKind {
             Self::Ident(s) => s.hash(state),
             Self::IntegerLit(s) => s.hash(state),
             Self::FloatLit(s) => s.hash(state),
+            Self::LineComment(s) => s.hash(state),
+            Self::BlockComment(s) => s.hash(state),
+            Self::DocLineComment(s) => s.hash(state),
+            Self::DocBlockComment(s) => s.hash(state),
             _ => {}
         }
     }

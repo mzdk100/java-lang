@@ -3,6 +3,7 @@
 use crate::{ident::Ident, span::Span};
 
 use super::{
+    Comment,
     attribute::Annotation,
     expr::Expr,
     generics::TypeParameters,
@@ -25,12 +26,12 @@ pub enum TypeDecl {
 impl TypeDecl {
     pub fn span(&self) -> Span {
         match self {
-            TypeDecl::Class(c) => c.span(),
-            TypeDecl::Interface(i) => i.span(),
-            TypeDecl::Enum(e) => e.span(),
-            TypeDecl::Record(r) => r.span(),
-            TypeDecl::AnnotationType(a) => a.span(),
-            TypeDecl::Empty(s) => *s,
+            Self::Class(c) => c.span(),
+            Self::Interface(i) => i.span(),
+            Self::Enum(e) => e.span(),
+            Self::Record(r) => r.span(),
+            Self::AnnotationType(a) => a.span(),
+            Self::Empty(s) => *s,
         }
     }
 }
@@ -38,6 +39,7 @@ impl TypeDecl {
 /// A class declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ClassDecl {
+    pub doc_comment: Vec<Comment>,
     pub modifiers: Vec<Modifier>,
     pub class_span: Span,
     pub name: Ident,
@@ -50,16 +52,16 @@ pub struct ClassDecl {
 
 impl ClassDecl {
     pub fn span(&self) -> Span {
-        self.modifiers
-            .first()
-            .map_or(self.class_span, |m| m.span())
-            .join(self.body.brace_span.1)
+        let code_start = self.modifiers.first().map_or(self.class_span, |m| m.span());
+        let start = self.doc_comment.first().map_or(code_start, |c| c.span);
+        start.join(self.body.brace_span.1)
     }
 }
 
 /// An interface declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct InterfaceDecl {
+    pub doc_comment: Vec<Comment>,
     pub modifiers: Vec<Modifier>,
     pub interface_span: Span,
     pub name: Ident,
@@ -71,16 +73,19 @@ pub struct InterfaceDecl {
 
 impl InterfaceDecl {
     pub fn span(&self) -> Span {
-        self.modifiers
+        let code_start = self
+            .modifiers
             .first()
-            .map_or(self.interface_span, |m| m.span())
-            .join(self.body.brace_span.1)
+            .map_or(self.interface_span, |m| m.span());
+        let start = self.doc_comment.first().map_or(code_start, |c| c.span);
+        start.join(self.body.brace_span.1)
     }
 }
 
 /// An enum declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EnumDecl {
+    pub doc_comment: Vec<Comment>,
     pub modifiers: Vec<Modifier>,
     pub enum_span: Span,
     pub name: Ident,
@@ -90,16 +95,16 @@ pub struct EnumDecl {
 
 impl EnumDecl {
     pub fn span(&self) -> Span {
-        self.modifiers
-            .first()
-            .map_or(self.enum_span, |m| m.span())
-            .join(self.body.brace_span.1)
+        let code_start = self.modifiers.first().map_or(self.enum_span, |m| m.span());
+        let start = self.doc_comment.first().map_or(code_start, |c| c.span);
+        start.join(self.body.brace_span.1)
     }
 }
 
 /// A record declaration (Java 16+).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RecordDecl {
+    pub doc_comment: Vec<Comment>,
     pub modifiers: Vec<Modifier>,
     pub record_span: Span,
     pub name: Ident,
@@ -111,16 +116,19 @@ pub struct RecordDecl {
 
 impl RecordDecl {
     pub fn span(&self) -> Span {
-        self.modifiers
+        let code_start = self
+            .modifiers
             .first()
-            .map_or(self.record_span, |m| m.span())
-            .join(self.body.brace_span.1)
+            .map_or(self.record_span, |m| m.span());
+        let start = self.doc_comment.first().map_or(code_start, |c| c.span);
+        start.join(self.body.brace_span.1)
     }
 }
 
 /// A module declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ModuleDecl {
+    pub doc_comment: Vec<Comment>,
     pub annotations: Vec<Annotation>,
     pub open_span: Option<Span>,
     pub module_span: Span,
@@ -131,10 +139,12 @@ pub struct ModuleDecl {
 
 impl ModuleDecl {
     pub fn span(&self) -> Span {
-        self.annotations
+        let code_start = self
+            .annotations
             .first()
-            .map_or(self.module_span, |a| a.span())
-            .join(self.brace_span.1)
+            .map_or(self.module_span, |a| a.span());
+        let start = self.doc_comment.first().map_or(code_start, |c| c.span);
+        start.join(self.brace_span.1)
     }
 }
 
@@ -218,21 +228,21 @@ pub enum Modifier {
 impl Modifier {
     pub fn span(&self) -> Span {
         match self {
-            Modifier::Public(s)
-            | Modifier::Protected(s)
-            | Modifier::Private(s)
-            | Modifier::Static(s)
-            | Modifier::Abstract(s)
-            | Modifier::Final(s)
-            | Modifier::Synchronized(s)
-            | Modifier::Native(s)
-            | Modifier::Strictfp(s)
-            | Modifier::Transient(s)
-            | Modifier::Volatile(s)
-            | Modifier::Default(s)
-            | Modifier::Sealed(s)
-            | Modifier::NonSealed(s) => *s,
-            Modifier::Annotation(a) => a.span(),
+            Self::Public(s)
+            | Self::Protected(s)
+            | Self::Private(s)
+            | Self::Static(s)
+            | Self::Abstract(s)
+            | Self::Final(s)
+            | Self::Synchronized(s)
+            | Self::Native(s)
+            | Self::Strictfp(s)
+            | Self::Transient(s)
+            | Self::Volatile(s)
+            | Self::Default(s)
+            | Self::Sealed(s)
+            | Self::NonSealed(s) => *s,
+            Self::Annotation(a) => a.span(),
         }
     }
 
@@ -240,13 +250,13 @@ impl Modifier {
     pub fn is_access_modifier(&self) -> bool {
         matches!(
             self,
-            Modifier::Public(_) | Modifier::Protected(_) | Modifier::Private(_)
+            Self::Public(_) | Self::Protected(_) | Self::Private(_)
         )
     }
 
     /// Check if this modifier is an annotation.
     pub fn is_annotation(&self) -> bool {
-        matches!(self, Modifier::Annotation(_))
+        matches!(self, Self::Annotation(_))
     }
 }
 
@@ -315,17 +325,17 @@ pub enum ClassBodyDecl {
 impl ClassBodyDecl {
     pub fn span(&self) -> Span {
         match self {
-            ClassBodyDecl::Field(f) => f.span(),
-            ClassBodyDecl::Method(m) => m.span(),
-            ClassBodyDecl::Constructor(c) => c.span(),
-            ClassBodyDecl::StaticInit(s) => s.span(),
-            ClassBodyDecl::InstanceInit(i) => i.span(),
-            ClassBodyDecl::Class(c) => c.span(),
-            ClassBodyDecl::Interface(i) => i.span(),
-            ClassBodyDecl::Enum(e) => e.span(),
-            ClassBodyDecl::Record(r) => r.span(),
-            ClassBodyDecl::AnnotationType(a) => a.span(),
-            ClassBodyDecl::Empty(s) => *s,
+            Self::Field(f) => f.span(),
+            Self::Method(m) => m.span(),
+            Self::Constructor(c) => c.span(),
+            Self::StaticInit(s) => s.span(),
+            Self::InstanceInit(i) => i.span(),
+            Self::Class(c) => c.span(),
+            Self::Interface(i) => i.span(),
+            Self::Enum(e) => e.span(),
+            Self::Record(r) => r.span(),
+            Self::AnnotationType(a) => a.span(),
+            Self::Empty(s) => *s,
         }
     }
 }
@@ -333,6 +343,7 @@ impl ClassBodyDecl {
 /// A field declaration: `[modifiers] type name [= expr] [, name [= expr]] ;`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FieldDecl {
+    pub doc_comment: Vec<Comment>,
     pub modifiers: Vec<Modifier>,
     pub ty: Type,
     pub declarators: Vec<super::stmt::VariableDeclarator>,
@@ -341,13 +352,15 @@ pub struct FieldDecl {
 
 impl FieldDecl {
     pub fn span(&self) -> Span {
-        self.semi_span
+        let start = self.doc_comment.first().map_or(self.semi_span, |c| c.span);
+        start.join(self.semi_span)
     }
 }
 
 /// A method declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MethodDecl {
+    pub doc_comment: Vec<Comment>,
     pub modifiers: Vec<Modifier>,
     pub type_params: Option<TypeParameters>,
     pub return_type: MethodReturnType,
@@ -365,10 +378,12 @@ impl MethodDecl {
             Some(b) => b.brace_span.1,
             None => self.paren_span.1,
         };
-        self.modifiers
+        let code_start = self
+            .modifiers
             .first()
-            .map_or(self.name.span(), |m| m.span())
-            .join(end)
+            .map_or(self.name.span(), |m| m.span());
+        let start = self.doc_comment.first().map_or(code_start, |c| c.span);
+        start.join(end)
     }
 }
 
@@ -419,6 +434,7 @@ pub struct ThrowsClause {
 /// A constructor declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConstructorDecl {
+    pub doc_comment: Vec<Comment>,
     pub modifiers: Vec<Modifier>,
     pub type_params: Option<TypeParameters>,
     pub name: Ident,
@@ -431,10 +447,12 @@ pub struct ConstructorDecl {
 
 impl ConstructorDecl {
     pub fn span(&self) -> Span {
-        self.modifiers
+        let code_start = self
+            .modifiers
             .first()
-            .map_or(self.name.span(), |m| m.span())
-            .join(self.body.brace_span.1)
+            .map_or(self.name.span(), |m| m.span());
+        let start = self.doc_comment.first().map_or(code_start, |c| c.span);
+        start.join(self.body.brace_span.1)
     }
 }
 
@@ -522,6 +540,7 @@ pub enum InterfaceMemberDecl {
 /// An annotation interface declaration: `@interface Name { ... }`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AnnotationInterfaceDecl {
+    pub doc_comment: Vec<Comment>,
     pub modifiers: Vec<Modifier>,
     pub at_span: Span,
     pub interface_span: Span,
@@ -531,10 +550,9 @@ pub struct AnnotationInterfaceDecl {
 
 impl AnnotationInterfaceDecl {
     pub fn span(&self) -> Span {
-        self.modifiers
-            .first()
-            .map_or(self.at_span, |m| m.span())
-            .join(self.body.brace_span.1)
+        let code_start = self.modifiers.first().map_or(self.at_span, |m| m.span());
+        let start = self.doc_comment.first().map_or(code_start, |c| c.span);
+        start.join(self.body.brace_span.1)
     }
 }
 
@@ -646,6 +664,7 @@ pub enum RecordBodyDecl {
 /// A compact constructor declaration for records.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CompactConstructorDecl {
+    pub doc_comment: Vec<Comment>,
     pub modifiers: Vec<Modifier>,
     pub name: Ident,
     pub body: ConstructorBody,

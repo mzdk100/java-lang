@@ -1,21 +1,13 @@
 use std::cell::{Cell, RefCell};
 
 use crate::{
+    ast::{Comment, CommentKind},
     error::{Error, Result},
     ident::Ident,
     lexer,
     span::Span,
     token::{Token, TokenKind},
 };
-
-static SYNTHETIC_GT: std::sync::OnceLock<Token> = std::sync::OnceLock::new();
-
-fn synthetic_gt() -> &'static Token {
-    SYNTHETIC_GT.get_or_init(|| Token {
-        kind: TokenKind::Gt,
-        span: Span::new(0, 0),
-    })
-}
 
 /// Saved parser state for speculative parsing with backtracking.
 pub struct ParserState {
@@ -32,6 +24,10 @@ pub struct ParseStream<'a> {
     errors: RefCell<Vec<Error>>,
     /// Pending greater-than tokens from splitting >> or >>> for nested generics
     pending_gts: Cell<u8>,
+    /// Pre-allocated synthetic `>` token for >> / >>> splitting
+    synthetic_gt: Token,
+    /// Comments skipped by skip_comments(), available for collection
+    pending_comments: RefCell<Vec<Comment>>,
 }
 
 impl<'a> ParseStream<'a> {
@@ -41,20 +37,40 @@ impl<'a> ParseStream<'a> {
             cursor: Cell::new(0),
             errors: RefCell::new(Vec::new()),
             pending_gts: Cell::new(0),
+            synthetic_gt: Token {
+                kind: TokenKind::Gt,
+                span: Span::new(0, 0),
+            },
+            pending_comments: RefCell::new(Vec::new()),
         }
     }
 
     /// Returns true if there are no more tokens to parse (except EOF).
     pub fn is_empty(&self) -> bool {
+        self.skip_comments();
+        let cursor = self.cursor.get();
+        cursor >= self.tokens.len() - 1
+    }
+
+    /// Returns true if there are no more tokens (including comments) except EOF.
+    pub fn is_empty_raw(&self) -> bool {
         let cursor = self.cursor.get();
         cursor >= self.tokens.len() - 1
     }
 
     /// Peek at the current token without consuming it.
+    /// Comment tokens are skipped transparently.
     pub fn peek(&self) -> &Token {
         if self.pending_gts.get() > 0 {
-            return synthetic_gt();
+            return &self.synthetic_gt;
         }
+        self.skip_comments();
+        let cursor = self.cursor.get();
+        &self.tokens[cursor.min(self.tokens.len() - 1)]
+    }
+
+    /// Peek at the raw token at the cursor without skipping comments.
+    pub fn peek_raw(&self) -> &Token {
         let cursor = self.cursor.get();
         &self.tokens[cursor.min(self.tokens.len() - 1)]
     }
@@ -84,16 +100,18 @@ impl<'a> ParseStream<'a> {
     }
 
     /// Advance past the current token and return it.
+    /// Comment tokens are skipped transparently.
     fn advance(&self) -> &Token {
         if self.pending_gts.get() > 0 {
             self.pending_gts.set(self.pending_gts.get() - 1);
-            return synthetic_gt();
+            return &self.synthetic_gt;
         }
         let cursor = self.cursor.get();
         let tok = &self.tokens[cursor];
         if cursor < self.tokens.len() - 1 {
             self.cursor.set(cursor + 1);
         }
+        self.skip_comments();
         tok
     }
 
@@ -204,11 +222,20 @@ impl<'a> ParseStream<'a> {
         }
     }
 
-    /// Look ahead `n` tokens.
+    /// Look ahead `n` tokens (skipping comments).
     pub fn look_ahead(&self, n: usize) -> &Token {
-        let cursor = self.cursor.get() + n;
-        let idx = cursor.min(self.tokens.len() - 1);
-        &self.tokens[idx]
+        let mut pos = self.cursor.get();
+        let mut remaining = n;
+        while pos < self.tokens.len() - 1 {
+            if !is_comment_token(&self.tokens[pos].kind) {
+                if remaining == 0 {
+                    break;
+                }
+                remaining -= 1;
+            }
+            pos += 1;
+        }
+        &self.tokens[pos.min(self.tokens.len() - 1)]
     }
 
     /// Parse a comma-separated list of items terminated by some token.
@@ -307,7 +334,12 @@ impl<'a> ParseStream<'a> {
         Ok(result)
     }
 
-    /// Consume an identifier token and return it as an `Ident`.
+    /// Consume the expected token, then return the span of the raw token at the cursor.
+    /// Unlike `expect(kind); peek().span`, this does NOT skip comments after consuming.
+    pub fn expect_then_raw_span(&self, kind: TokenKind) -> Result<Span> {
+        self.expect(kind)?;
+        Ok(self.peek_raw().span)
+    }
     /// Also accepts contextual keywords (record, sealed, var, yield, open, etc.)
     pub fn parse_ident(&self) -> Result<Ident> {
         match &self.peek().kind {
@@ -364,6 +396,106 @@ impl<'a> ParseStream<'a> {
             start
         };
         start.join(end)
+    }
+
+    /// Skip past any comment tokens at the current cursor position.
+    /// This is the public version for explicit comment skipping.
+    pub fn skip_comments_to_peek(&self) {
+        self.skip_comments();
+    }
+
+    fn skip_comments(&self) {
+        while self.cursor.get() < self.tokens.len()
+            && is_comment_token(&self.tokens[self.cursor.get()].kind)
+        {
+            let tok = &self.tokens[self.cursor.get()];
+            self.pending_comments
+                .borrow_mut()
+                .push(token_to_comment(tok));
+            self.cursor.set(self.cursor.get() + 1);
+        }
+    }
+
+    /// Collect pending doc comments (skipped by peek/advance).
+    /// Returns only doc comments (/// and /** */), discards regular comments.
+    pub fn collect_pending_doc_comments(&self) -> Vec<Comment> {
+        let all = self
+            .pending_comments
+            .borrow_mut()
+            .drain(..)
+            .collect::<Vec<_>>();
+        all.into_iter()
+            .filter(|c| c.kind == CommentKind::DocLine || c.kind == CommentKind::DocBlock)
+            .collect()
+    }
+
+    /// Collect all pending comments (skipped by peek/advance).
+    pub fn collect_pending_comments(&self) -> Vec<Comment> {
+        self.pending_comments.borrow_mut().drain(..).collect()
+    }
+
+    /// Collect and consume leading doc comments (/// and /** */).
+    /// Regular comments (// and /* */) are skipped.
+    pub fn collect_leading_doc_comments(&self) -> Vec<Comment> {
+        let mut comments = Vec::new();
+        while self.cursor.get() < self.tokens.len() {
+            match &self.tokens[self.cursor.get()].kind {
+                TokenKind::DocLineComment(_) | TokenKind::DocBlockComment(_) => {
+                    let tok = &self.tokens[self.cursor.get()];
+                    comments.push(token_to_comment(tok));
+                    self.cursor.set(self.cursor.get() + 1);
+                }
+                TokenKind::LineComment(_) | TokenKind::BlockComment(_) => {
+                    // Skip regular comments
+                    self.cursor.set(self.cursor.get() + 1);
+                }
+                _ => break,
+            }
+        }
+        comments
+    }
+
+    /// Collect and consume all leading comments (both doc and regular).
+    pub fn collect_leading_comments(&self) -> Vec<Comment> {
+        let mut comments = Vec::new();
+        while self.cursor.get() < self.tokens.len() {
+            match &self.tokens[self.cursor.get()].kind {
+                TokenKind::LineComment(_)
+                | TokenKind::BlockComment(_)
+                | TokenKind::DocLineComment(_)
+                | TokenKind::DocBlockComment(_) => {
+                    let tok = &self.tokens[self.cursor.get()];
+                    comments.push(token_to_comment(tok));
+                    self.cursor.set(self.cursor.get() + 1);
+                }
+                _ => break,
+            }
+        }
+        comments
+    }
+}
+
+fn is_comment_token(kind: &TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::LineComment(_)
+            | TokenKind::BlockComment(_)
+            | TokenKind::DocLineComment(_)
+            | TokenKind::DocBlockComment(_)
+    )
+}
+
+fn token_to_comment(tok: &Token) -> Comment {
+    let kind = match &tok.kind {
+        TokenKind::DocLineComment(_) => CommentKind::DocLine,
+        TokenKind::DocBlockComment(_) => CommentKind::DocBlock,
+        TokenKind::LineComment(_) => CommentKind::Line,
+        TokenKind::BlockComment(_) => CommentKind::Block,
+        _ => unreachable!(),
+    };
+    Comment {
+        kind,
+        span: tok.span,
     }
 }
 

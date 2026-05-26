@@ -1,4 +1,4 @@
-use java_lang::{ast::*, parse_str};
+use java_lang::{CommentKind, ast::*, parse_str};
 
 #[test]
 fn test_empty_compilation_unit() {
@@ -395,7 +395,8 @@ fn test_static_initializer() {
 
 #[test]
 fn test_instance_initializer() {
-    let _cu: CompilationUnit = parse_str("class Foo { { System.out.println(\"init\"); } }").unwrap();
+    let _cu: CompilationUnit =
+        parse_str("class Foo { { System.out.println(\"init\"); } }").unwrap();
 }
 
 #[test]
@@ -424,7 +425,8 @@ fn test_throws_clause() {
 
 #[test]
 fn test_generic_method() {
-    let _cu: CompilationUnit = parse_str("class Foo { <T> T identity(T t) { return t; } }").unwrap();
+    let _cu: CompilationUnit =
+        parse_str("class Foo { <T> T identity(T t) { return t; } }").unwrap();
 }
 
 #[test]
@@ -460,7 +462,8 @@ fn test_assert() {
 
 #[test]
 fn test_do_while() {
-    let _cu: CompilationUnit = parse_str("class Foo { void m() { do { } while (true); } }").unwrap();
+    let _cu: CompilationUnit =
+        parse_str("class Foo { void m() { do { } while (true); } }").unwrap();
 }
 
 #[test]
@@ -573,4 +576,183 @@ fn test_class_literal() {
 fn test_super_keyword() {
     let _cu: CompilationUnit =
         parse_str("class Foo extends Bar { void m() { super.m(); } }").unwrap();
+}
+
+// ============================================================================
+// Comment parsing tests
+// ============================================================================
+
+#[test]
+fn test_doc_comment_on_class() {
+    let cu: CompilationUnit = parse_str("/** A class. */\nclass Foo {}").unwrap();
+    let decl = match &cu.type_decls[0] {
+        TypeDecl::Class(c) => c,
+        _ => panic!("expected class"),
+    };
+    assert_eq!(decl.doc_comment.len(), 1);
+    assert_eq!(decl.doc_comment[0].kind, CommentKind::DocBlock);
+}
+
+#[test]
+fn test_doc_comment_on_method() {
+    let cu: CompilationUnit = parse_str("class Foo {\n/** A method. */\nvoid m() {}\n}").unwrap();
+    let class = match &cu.type_decls[0] {
+        TypeDecl::Class(c) => c,
+        _ => panic!("expected class"),
+    };
+    let method = match &class.body.declarations[0] {
+        ClassBodyDecl::Method(m) => m,
+        _ => panic!("expected method"),
+    };
+    assert_eq!(method.doc_comment.len(), 1);
+    assert_eq!(method.doc_comment[0].kind, CommentKind::DocBlock);
+}
+
+#[test]
+fn test_doc_comment_on_field() {
+    let cu: CompilationUnit = parse_str("class Foo {\n/** A field. */\nint x;\n}").unwrap();
+    let class = match &cu.type_decls[0] {
+        TypeDecl::Class(c) => c,
+        _ => panic!("expected class"),
+    };
+    let field = match &class.body.declarations[0] {
+        ClassBodyDecl::Field(f) => f,
+        _ => panic!("expected field"),
+    };
+    assert_eq!(field.doc_comment.len(), 1);
+    assert_eq!(field.doc_comment[0].kind, CommentKind::DocBlock);
+}
+
+#[test]
+fn test_doc_line_comment_on_class() {
+    let cu: CompilationUnit = parse_str("/// A class.\nclass Foo {}").unwrap();
+    let decl = match &cu.type_decls[0] {
+        TypeDecl::Class(c) => c,
+        _ => panic!("expected class"),
+    };
+    assert_eq!(decl.doc_comment.len(), 1);
+    assert_eq!(decl.doc_comment[0].kind, CommentKind::DocLine);
+}
+
+#[test]
+fn test_regular_comment_on_statement() {
+    let cu: CompilationUnit =
+        parse_str("class Foo {\nvoid m() {\n// a comment\nint x = 1;\n}\n}").unwrap();
+    let class = match &cu.type_decls[0] {
+        TypeDecl::Class(c) => c,
+        _ => panic!("expected class"),
+    };
+    let method = match &class.body.declarations[0] {
+        ClassBodyDecl::Method(m) => m,
+        _ => panic!("expected method"),
+    };
+    let block = method.body.as_ref().unwrap();
+    let local = match &block.stmts[0] {
+        Stmt::LocalVarDecl(d) => d,
+        _ => panic!("expected local var decl"),
+    };
+    assert_eq!(local.leading_comments.len(), 1);
+    assert_eq!(local.leading_comments[0].kind, CommentKind::Line);
+}
+
+#[test]
+fn test_block_comment_on_statement() {
+    let cu: CompilationUnit =
+        parse_str("class Foo {\nvoid m() {\n/* block */\nint x = 1;\n}\n}").unwrap();
+    let class = match &cu.type_decls[0] {
+        TypeDecl::Class(c) => c,
+        _ => panic!("expected class"),
+    };
+    let method = match &class.body.declarations[0] {
+        ClassBodyDecl::Method(m) => m,
+        _ => panic!("expected method"),
+    };
+    let block = method.body.as_ref().unwrap();
+    let local = match &block.stmts[0] {
+        Stmt::LocalVarDecl(d) => d,
+        _ => panic!("expected local var decl"),
+    };
+    assert_eq!(local.leading_comments.len(), 1);
+    assert_eq!(local.leading_comments[0].kind, CommentKind::Block);
+}
+
+#[test]
+fn test_multiple_doc_comments() {
+    let cu: CompilationUnit =
+        parse_str("/// Line 1\n/// Line 2\n/** Block doc. */\nclass Foo {}").unwrap();
+    let decl = match &cu.type_decls[0] {
+        TypeDecl::Class(c) => c,
+        _ => panic!("expected class"),
+    };
+    assert_eq!(decl.doc_comment.len(), 3);
+    assert_eq!(decl.doc_comment[0].kind, CommentKind::DocLine);
+    assert_eq!(decl.doc_comment[1].kind, CommentKind::DocLine);
+    assert_eq!(decl.doc_comment[2].kind, CommentKind::DocBlock);
+}
+
+#[test]
+fn test_regular_comment_skipped_for_items() {
+    // Regular comments before items should NOT attach as doc comments
+    let cu: CompilationUnit = parse_str("// regular\nclass Foo {}").unwrap();
+    let decl = match &cu.type_decls[0] {
+        TypeDecl::Class(c) => c,
+        _ => panic!("expected class"),
+    };
+    assert!(decl.doc_comment.is_empty());
+}
+
+#[test]
+fn test_comments_collected_in_compilation_unit() {
+    let cu: CompilationUnit = parse_str("class Foo {}\n// trailing").unwrap();
+    assert_eq!(cu.comments.len(), 1);
+    assert_eq!(cu.comments[0].kind, CommentKind::Line);
+}
+
+#[test]
+fn test_doc_comment_on_interface() {
+    let cu: CompilationUnit = parse_str("/** An interface. */\ninterface Foo {}").unwrap();
+    let decl = match &cu.type_decls[0] {
+        TypeDecl::Interface(i) => i,
+        _ => panic!("expected interface"),
+    };
+    assert_eq!(decl.doc_comment.len(), 1);
+    assert_eq!(decl.doc_comment[0].kind, CommentKind::DocBlock);
+}
+
+#[test]
+fn test_doc_comment_on_enum() {
+    let cu: CompilationUnit = parse_str("/** An enum. */\nenum Foo { A, B }").unwrap();
+    let decl = match &cu.type_decls[0] {
+        TypeDecl::Enum(e) => e,
+        _ => panic!("expected enum"),
+    };
+    assert_eq!(decl.doc_comment.len(), 1);
+    assert_eq!(decl.doc_comment[0].kind, CommentKind::DocBlock);
+}
+
+#[test]
+fn test_doc_comment_on_record() {
+    let cu: CompilationUnit = parse_str("/** A record. */\nrecord Foo(int x) {}").unwrap();
+    let decl = match &cu.type_decls[0] {
+        TypeDecl::Record(r) => r,
+        _ => panic!("expected record"),
+    };
+    assert_eq!(decl.doc_comment.len(), 1);
+    assert_eq!(decl.doc_comment[0].kind, CommentKind::DocBlock);
+}
+
+#[test]
+fn test_comment_between_items_not_attached() {
+    let cu: CompilationUnit =
+        parse_str("/** Doc A. */\nclass A {}\n// between\n/** Doc B. */\nclass B {}").unwrap();
+    let a = match &cu.type_decls[0] {
+        TypeDecl::Class(c) => c,
+        _ => panic!("expected class A"),
+    };
+    assert_eq!(a.doc_comment.len(), 1);
+    let b = match &cu.type_decls[1] {
+        TypeDecl::Class(c) => c,
+        _ => panic!("expected class B"),
+    };
+    assert_eq!(b.doc_comment.len(), 1);
 }

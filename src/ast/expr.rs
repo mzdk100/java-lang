@@ -72,31 +72,31 @@ pub enum Expr {
 impl Expr {
     pub fn span(&self) -> Span {
         match self {
-            Expr::Literal(lit) => lit.span(),
-            Expr::Ident(ident) => ident.span(),
-            Expr::This(s) => *s,
-            Expr::Super(s) => *s,
-            Expr::Paren { paren_span, .. } => paren_span.0.join(paren_span.1),
-            Expr::ClassLit {
+            Self::Literal(lit) => lit.span(),
+            Self::Ident(ident) => ident.span(),
+            Self::This(s) => *s,
+            Self::Super(s) => *s,
+            Self::Paren { paren_span, .. } => paren_span.0.join(paren_span.1),
+            Self::ClassLit {
                 type_expr,
                 class_span,
                 ..
             } => type_expr.span().join(*class_span),
-            Expr::FieldAccess(e) => e.span(),
-            Expr::MethodCall(e) => e.span(),
-            Expr::ArrayAccess(e) => e.span(),
-            Expr::MethodRef(e) => e.span(),
-            Expr::ArrayNew(e) => e.span(),
-            Expr::Cast(e) => e.span(),
-            Expr::Binary(e) => e.span(),
-            Expr::Unary(e) => e.span(),
-            Expr::Instanceof(e) => e.span(),
-            Expr::Assign(e) => e.span(),
-            Expr::Conditional(e) => e.span(),
-            Expr::Lambda(e) => e.span,
-            Expr::Switch(e) => e.span(),
-            Expr::NewClass(e) => e.span(),
-            Expr::ArrayInit(e) => e.brace_span.0.join(e.brace_span.1),
+            Self::FieldAccess(e) => e.span(),
+            Self::MethodCall(e) => e.span(),
+            Self::ArrayAccess(e) => e.span(),
+            Self::MethodRef(e) => e.span(),
+            Self::ArrayNew(e) => e.span(),
+            Self::Cast(e) => e.span(),
+            Self::Binary(e) => e.span(),
+            Self::Unary(e) => e.span(),
+            Self::Instanceof(e) => e.span(),
+            Self::Assign(e) => e.span(),
+            Self::Conditional(e) => e.span(),
+            Self::Lambda(e) => e.span,
+            Self::Switch(e) => e.span(),
+            Self::NewClass(e) => e.span(),
+            Self::ArrayInit(e) => e.brace_span.0.join(e.brace_span.1),
         }
     }
 }
@@ -190,10 +190,10 @@ pub enum MethodRefTarget {
 impl MethodRefTarget {
     pub fn span(&self) -> Span {
         match self {
-            MethodRefTarget::Type(p) => p.span,
-            MethodRefTarget::Expr(e) => e.span(),
-            MethodRefTarget::Super(s) => *s,
-            MethodRefTarget::SuperFromType {
+            Self::Type(p) => p.span,
+            Self::Expr(e) => e.span(),
+            Self::Super(s) => *s,
+            Self::SuperFromType {
                 type_name,
                 super_span,
                 ..
@@ -369,9 +369,9 @@ pub enum AssignTarget {
 impl AssignTarget {
     pub fn span(&self) -> Span {
         match self {
-            AssignTarget::Ident(i) => i.span(),
-            AssignTarget::FieldAccess(f) => f.span(),
-            AssignTarget::ArrayAccess(a) => a.span(),
+            Self::Ident(i) => i.span(),
+            Self::FieldAccess(f) => f.span(),
+            Self::ArrayAccess(a) => a.span(),
         }
     }
 }
@@ -436,8 +436,8 @@ pub enum LambdaBody {
 impl LambdaBody {
     pub fn span(&self) -> Span {
         match self {
-            LambdaBody::Expr(e) => e.span(),
-            LambdaBody::Block(b) => b.span(),
+            Self::Expr(e) => e.span(),
+            Self::Block(b) => b.span(),
         }
     }
 }
@@ -474,10 +474,10 @@ pub enum SwitchArm {
 impl SwitchArm {
     pub fn span(&self) -> Span {
         match self {
-            SwitchArm::Expr(case, _arrow, expr) => case.span().join(expr.span()),
-            SwitchArm::Block(case, _arrow, block) => case.span().join(block.brace_span.1),
-            SwitchArm::Throw(case, _arrow, expr) => case.span().join(expr.span()),
-            SwitchArm::Colon(case, stmts) => {
+            Self::Expr(case, _arrow, expr) => case.span().join(expr.span()),
+            Self::Block(case, _arrow, block) => case.span().join(block.brace_span.1),
+            Self::Throw(case, _arrow, expr) => case.span().join(expr.span()),
+            Self::Colon(case, stmts) => {
                 let end = stmts.last().map(|s| s.span()).unwrap_or(case.span());
                 case.span().join(end)
             }
@@ -511,20 +511,20 @@ pub enum SwitchCase {
 impl SwitchCase {
     pub fn span(&self) -> Span {
         match self {
-            SwitchCase::CaseValues { case_span, values } => {
+            Self::CaseValues { case_span, values } => {
                 let end = values.last().map(|v| v.span()).unwrap_or(*case_span);
                 case_span.join(end)
             }
-            SwitchCase::CaseNull {
+            Self::CaseNull {
                 case_span,
                 null_span,
             } => case_span.join(*null_span),
-            SwitchCase::CaseNullDefault {
+            Self::CaseNullDefault {
                 case_span,
                 default_span,
                 ..
             } => case_span.join(*default_span),
-            SwitchCase::CasePattern {
+            Self::CasePattern {
                 case_span,
                 pattern,
                 guard,
@@ -535,7 +535,7 @@ impl SwitchCase {
                 };
                 case_span.join(end)
             }
-            SwitchCase::Default { default_span } => *default_span,
+            Self::Default { default_span } => *default_span,
         }
     }
 }

@@ -2,7 +2,7 @@
 
 use crate::{ident::Ident, span::Span};
 
-use super::{expr::Expr, item::Modifier, ty::Type};
+use super::{Comment, expr::Expr, item::Modifier, ty::Type};
 
 /// A Java statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -52,26 +52,26 @@ pub enum Stmt {
 impl Stmt {
     pub fn span(&self) -> Span {
         match self {
-            Stmt::Empty(s) => *s,
-            Stmt::Block(b) => b.span(),
-            Stmt::Labeled(l) => l.span(),
-            Stmt::Expr(e) => e.span(),
-            Stmt::LocalVarDecl(d) => d.span(),
-            Stmt::If(s) => s.span(),
-            Stmt::Assert(s) => s.span(),
-            Stmt::Switch(s) => s.span(),
-            Stmt::While(s) => s.span(),
-            Stmt::DoWhile(s) => s.span(),
-            Stmt::For(s) => s.span(),
-            Stmt::EnhancedFor(s) => s.span(),
-            Stmt::Break(s) => s.span(),
-            Stmt::Continue(s) => s.span(),
-            Stmt::Return(s) => s.span(),
-            Stmt::Throw(s) => s.span(),
-            Stmt::Synchronized(s) => s.span(),
-            Stmt::Try(s) => s.span(),
-            Stmt::Yield(s) => s.span(),
-            Stmt::ClassDecl(d) => d.span(),
+            Self::Empty(s) => *s,
+            Self::Block(b) => b.span(),
+            Self::Labeled(l) => l.span(),
+            Self::Expr(e) => e.span(),
+            Self::LocalVarDecl(d) => d.span(),
+            Self::If(s) => s.span(),
+            Self::Assert(s) => s.span(),
+            Self::Switch(s) => s.span(),
+            Self::While(s) => s.span(),
+            Self::DoWhile(s) => s.span(),
+            Self::For(s) => s.span(),
+            Self::EnhancedFor(s) => s.span(),
+            Self::Break(s) => s.span(),
+            Self::Continue(s) => s.span(),
+            Self::Return(s) => s.span(),
+            Self::Throw(s) => s.span(),
+            Self::Synchronized(s) => s.span(),
+            Self::Try(s) => s.span(),
+            Self::Yield(s) => s.span(),
+            Self::ClassDecl(d) => d.span(),
         }
     }
 }
@@ -79,19 +79,25 @@ impl Stmt {
 /// A block: `{ stmt1; stmt2; ... }`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Block {
+    pub leading_comments: Vec<Comment>,
     pub brace_span: (Span, Span),
     pub stmts: Vec<Stmt>,
 }
 
 impl Block {
     pub fn span(&self) -> Span {
-        self.brace_span.0.join(self.brace_span.1)
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.brace_span.0, |c| c.span);
+        start.join(self.brace_span.1)
     }
 }
 
 /// A labeled statement: `label: stmt`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LabeledStmt {
+    pub leading_comments: Vec<Comment>,
     pub label: Ident,
     pub colon_span: Span,
     pub stmt: Box<Stmt>,
@@ -99,26 +105,36 @@ pub struct LabeledStmt {
 
 impl LabeledStmt {
     pub fn span(&self) -> Span {
-        self.label.span().join(self.stmt.span())
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.label.span(), |c| c.span);
+        start.join(self.stmt.span())
     }
 }
 
 /// An expression statement: `expr;`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExprStmt {
+    pub leading_comments: Vec<Comment>,
     pub expr: Expr,
     pub semi_span: Span,
 }
 
 impl ExprStmt {
     pub fn span(&self) -> Span {
-        self.expr.span().join(self.semi_span)
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.expr.span(), |c| c.span);
+        start.join(self.semi_span)
     }
 }
 
 /// A local variable declaration statement: `int x = 5, y = 10;`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LocalVarDeclStmt {
+    pub leading_comments: Vec<Comment>,
     pub modifiers: Vec<Modifier>,
     pub ty: LocalVarType,
     pub declarators: Vec<VariableDeclarator>,
@@ -127,7 +143,11 @@ pub struct LocalVarDeclStmt {
 
 impl LocalVarDeclStmt {
     pub fn span(&self) -> Span {
-        self.semi_span
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.semi_span, |c| c.span);
+        start.join(self.semi_span)
     }
 }
 
@@ -151,6 +171,7 @@ pub struct VariableDeclarator {
 /// An if statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IfStmt {
+    pub leading_comments: Vec<Comment>,
     pub if_span: Span,
     pub paren_span: (Span, Span),
     pub cond: Expr,
@@ -164,13 +185,18 @@ impl IfStmt {
             Some((_, stmt)) => stmt.span(),
             None => self.then_stmt.span(),
         };
-        self.if_span.join(end)
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.if_span, |c| c.span);
+        start.join(end)
     }
 }
 
 /// An assert statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AssertStmt {
+    pub leading_comments: Vec<Comment>,
     pub assert_span: Span,
     pub cond: Expr,
     pub detail: Option<(Span, Expr)>,
@@ -179,13 +205,18 @@ pub struct AssertStmt {
 
 impl AssertStmt {
     pub fn span(&self) -> Span {
-        self.assert_span.join(self.semi_span)
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.assert_span, |c| c.span);
+        start.join(self.semi_span)
     }
 }
 
 /// A switch statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SwitchStmt {
+    pub leading_comments: Vec<Comment>,
     pub switch_span: Span,
     pub paren_span: (Span, Span),
     pub selector: Expr,
@@ -195,7 +226,11 @@ pub struct SwitchStmt {
 
 impl SwitchStmt {
     pub fn span(&self) -> Span {
-        self.switch_span.join(self.brace_span.1)
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.switch_span, |c| c.span);
+        start.join(self.brace_span.1)
     }
 }
 
@@ -210,6 +245,7 @@ pub struct SwitchCaseGroup {
 /// A while statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WhileStmt {
+    pub leading_comments: Vec<Comment>,
     pub while_span: Span,
     pub paren_span: (Span, Span),
     pub cond: Expr,
@@ -218,13 +254,18 @@ pub struct WhileStmt {
 
 impl WhileStmt {
     pub fn span(&self) -> Span {
-        self.while_span.join(self.body.span())
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.while_span, |c| c.span);
+        start.join(self.body.span())
     }
 }
 
 /// A do-while statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DoWhileStmt {
+    pub leading_comments: Vec<Comment>,
     pub do_span: Span,
     pub body: Box<Stmt>,
     pub while_span: Span,
@@ -235,13 +276,18 @@ pub struct DoWhileStmt {
 
 impl DoWhileStmt {
     pub fn span(&self) -> Span {
-        self.do_span.join(self.semi_span)
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.do_span, |c| c.span);
+        start.join(self.semi_span)
     }
 }
 
 /// A for statement: `for (init; cond; update) body`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ForStmt {
+    pub leading_comments: Vec<Comment>,
     pub for_span: Span,
     pub paren_span: (Span, Span),
     pub init: ForInit,
@@ -253,7 +299,11 @@ pub struct ForStmt {
 
 impl ForStmt {
     pub fn span(&self) -> Span {
-        self.for_span.join(self.body.span())
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.for_span, |c| c.span);
+        start.join(self.body.span())
     }
 }
 
@@ -269,6 +319,7 @@ pub enum ForInit {
 /// An enhanced for statement: `for (Type var : iterable) body`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EnhancedForStmt {
+    pub leading_comments: Vec<Comment>,
     pub for_span: Span,
     pub paren_span: (Span, Span),
     pub var_decl: LocalVarDeclStmt,
@@ -279,13 +330,18 @@ pub struct EnhancedForStmt {
 
 impl EnhancedForStmt {
     pub fn span(&self) -> Span {
-        self.for_span.join(self.body.span())
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.for_span, |c| c.span);
+        start.join(self.body.span())
     }
 }
 
 /// A break or continue statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct JumpStmt {
+    pub leading_comments: Vec<Comment>,
     pub keyword_span: Span,
     pub label: Option<Ident>,
     pub semi_span: Span,
@@ -293,13 +349,18 @@ pub struct JumpStmt {
 
 impl JumpStmt {
     pub fn span(&self) -> Span {
-        self.keyword_span.join(self.semi_span)
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.keyword_span, |c| c.span);
+        start.join(self.semi_span)
     }
 }
 
 /// A return statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ReturnStmt {
+    pub leading_comments: Vec<Comment>,
     pub return_span: Span,
     pub value: Option<Expr>,
     pub semi_span: Span,
@@ -307,13 +368,18 @@ pub struct ReturnStmt {
 
 impl ReturnStmt {
     pub fn span(&self) -> Span {
-        self.return_span.join(self.semi_span)
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.return_span, |c| c.span);
+        start.join(self.semi_span)
     }
 }
 
 /// A throw statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ThrowStmt {
+    pub leading_comments: Vec<Comment>,
     pub throw_span: Span,
     pub expr: Expr,
     pub semi_span: Span,
@@ -321,13 +387,18 @@ pub struct ThrowStmt {
 
 impl ThrowStmt {
     pub fn span(&self) -> Span {
-        self.throw_span.join(self.semi_span)
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.throw_span, |c| c.span);
+        start.join(self.semi_span)
     }
 }
 
 /// A synchronized statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SynchronizedStmt {
+    pub leading_comments: Vec<Comment>,
     pub synchronized_span: Span,
     pub paren_span: (Span, Span),
     pub lock: Expr,
@@ -336,7 +407,11 @@ pub struct SynchronizedStmt {
 
 impl SynchronizedStmt {
     pub fn span(&self) -> Span {
-        self.synchronized_span.join(self.body.span())
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.synchronized_span, |c| c.span);
+        start.join(self.body.span())
     }
 }
 
@@ -345,6 +420,7 @@ impl SynchronizedStmt {
 pub enum TryStmt {
     /// `try { ... } catches [finally]`
     Basic {
+        leading_comments: Vec<Comment>,
         try_span: Span,
         block: Block,
         catches: Vec<CatchClause>,
@@ -352,6 +428,7 @@ pub enum TryStmt {
     },
     /// `try (resources) { ... } catches [finally]`
     TryWithResources {
+        leading_comments: Vec<Comment>,
         try_span: Span,
         paren_span: (Span, Span),
         resources: Vec<TryResource>,
@@ -364,7 +441,8 @@ pub enum TryStmt {
 impl TryStmt {
     pub fn span(&self) -> Span {
         match self {
-            TryStmt::Basic {
+            Self::Basic {
+                leading_comments,
                 try_span,
                 block,
                 finally_block,
@@ -374,9 +452,11 @@ impl TryStmt {
                     Some((_, b)) => b.brace_span.1,
                     None => block.brace_span.1,
                 };
-                try_span.join(end)
+                let start = leading_comments.first().map_or(*try_span, |c| c.span);
+                start.join(end)
             }
-            TryStmt::TryWithResources {
+            Self::TryWithResources {
+                leading_comments,
                 try_span,
                 block,
                 finally_block,
@@ -386,7 +466,8 @@ impl TryStmt {
                     Some((_, b)) => b.brace_span.1,
                     None => block.brace_span.1,
                 };
-                try_span.join(end)
+                let start = leading_comments.first().map_or(*try_span, |c| c.span);
+                start.join(end)
             }
         }
     }
@@ -427,6 +508,7 @@ pub enum TryResource {
 /// A yield statement (in switch expressions).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct YieldStmt {
+    pub leading_comments: Vec<Comment>,
     pub yield_span: Span,
     pub value: Expr,
     pub semi_span: Span,
@@ -434,6 +516,10 @@ pub struct YieldStmt {
 
 impl YieldStmt {
     pub fn span(&self) -> Span {
-        self.yield_span.join(self.semi_span)
+        let start = self
+            .leading_comments
+            .first()
+            .map_or(self.yield_span, |c| c.span);
+        start.join(self.semi_span)
     }
 }

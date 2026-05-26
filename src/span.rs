@@ -16,9 +16,9 @@ impl Span {
     }
 
     /// Create a span that covers two spans.
-    pub fn join(self, other: impl std::borrow::Borrow<Span>) -> Span {
+    pub fn join(self, other: impl std::borrow::Borrow<Span>) -> Self {
         let other = other.borrow();
-        Span {
+        Self {
             start: self.start.min(other.start),
             end: self.end.max(other.end),
         }

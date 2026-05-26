@@ -1,4 +1,4 @@
-use std::{cell::RefCell, sync::Arc};
+use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     ident::{is_java_identifier_continue, is_java_identifier_start},
@@ -12,7 +12,7 @@ pub struct Lexer<'a> {
     chars: RefCell<std::iter::Peekable<std::str::CharIndices<'a>>>,
     offset: RefCell<usize>,
     #[allow(dead_code)]
-    source: Arc<str>,
+    source: Rc<str>,
 }
 
 impl<'a> Lexer<'a> {
@@ -21,12 +21,12 @@ impl<'a> Lexer<'a> {
             input,
             chars: RefCell::new(input.char_indices().peekable()),
             offset: RefCell::new(0),
-            source: Arc::from(input),
+            source: Rc::from(input),
         }
     }
 
     #[allow(dead_code)]
-    pub fn source(&self) -> Arc<str> {
+    pub fn source(&self) -> Rc<str> {
         self.source.clone()
     }
 
@@ -34,9 +34,14 @@ impl<'a> Lexer<'a> {
     pub fn tokenize(&self) -> Vec<Token> {
         let mut tokens = Vec::new();
         loop {
-            self.skip_whitespace_and_comments();
+            self.skip_whitespace();
             if *self.offset.borrow() >= self.input.len() {
                 break;
+            }
+            // Check for comments before regular tokens
+            if let Some(comment_token) = self.try_lex_comment() {
+                tokens.push(comment_token);
+                continue;
             }
             if let Some(token) = self.next_token() {
                 tokens.push(token);
@@ -49,66 +54,117 @@ impl<'a> Lexer<'a> {
         tokens
     }
 
-    fn skip_whitespace_and_comments(&self) {
-        loop {
-            match self.peek_char() {
-                None => break,
-                Some((_, ch)) if ch.is_whitespace() => {
-                    self.advance();
-                }
-                Some((_, '/')) => {
-                    let offset = *self.offset.borrow();
-                    let next_offset = offset + '/'.len_utf8();
-                    if let Some(ch) = self.input[next_offset..].chars().next() {
-                        if ch == '/' {
-                            self.skip_line_comment();
-                            continue;
-                        } else if ch == '*' {
-                            self.skip_block_comment();
-                            continue;
+    fn skip_whitespace(&self) {
+        while let Some((_, ch)) = self.peek_char() {
+            if ch.is_whitespace() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Try to lex a comment. Returns None if the next characters are not a comment.
+    fn try_lex_comment(&self) -> Option<Token> {
+        let start = *self.offset.borrow();
+        if self.peek_char().map(|(_, c)| c) != Some('/') {
+            return None;
+        }
+        // Look ahead to determine comment type
+        let next_offset = start + '/'.len_utf8();
+        if next_offset >= self.input.len() {
+            return None;
+        }
+        let next_ch = self.input[next_offset..].chars().next()?;
+        match next_ch {
+            '/' => {
+                // Line comment: // or doc line comment: /// (but not ////)
+                self.advance(); // skip first '/'
+                self.advance(); // skip second '/'
+                let is_doc = if self.peek_char().map(|(_, c)| c) == Some('/') {
+                    // Check if it's //// (not a doc comment)
+                    let third_offset = *self.offset.borrow() + '/'.len_utf8();
+                    if third_offset < self.input.len()
+                        && self.input[third_offset..].starts_with('/')
+                    {
+                        false // //// → regular line comment
+                    } else {
+                        self.advance(); // skip third '/'
+                        true
+                    }
+                } else {
+                    false
+                };
+                // Consume until end of line
+                loop {
+                    match self.peek_char() {
+                        None => break,
+                        Some((_, '\n')) => {
+                            self.advance();
+                            break;
+                        }
+                        Some(_) => {
+                            self.advance();
                         }
                     }
-                    break;
                 }
-                _ => break,
+                let span = self.span_since(start);
+                let text = self.input[start..*self.offset.borrow()].to_string();
+                Some(Token::new(
+                    if is_doc {
+                        TokenKind::DocLineComment(text)
+                    } else {
+                        TokenKind::LineComment(text)
+                    },
+                    span,
+                ))
             }
-        }
-    }
-
-    fn skip_line_comment(&self) {
-        self.advance();
-        self.advance();
-        loop {
-            match self.peek_char() {
-                None => break,
-                Some((_, '\n')) => {
-                    self.advance();
-                    break;
-                }
-                Some(_) => {
-                    self.advance();
-                }
-            }
-        }
-    }
-
-    fn skip_block_comment(&self) {
-        self.advance();
-        self.advance();
-        loop {
-            match self.peek_char() {
-                None => break,
-                Some((_, '*')) => {
-                    self.advance();
-                    if let Some((_, '/')) = self.peek_char() {
-                        self.advance();
-                        return;
+            '*' => {
+                // Block comment: /* or doc block comment: /** (but not /**/)
+                self.advance(); // skip '/'
+                self.advance(); // skip '*'
+                let is_doc = if self.peek_char().map(|(_, c)| c) == Some('*') {
+                    // Check if it's /**/ (empty block comment, not doc)
+                    let star_offset = *self.offset.borrow() + '*'.len_utf8();
+                    if star_offset < self.input.len()
+                        && self.input[star_offset..].starts_with('/')
+                    {
+                        false // /**/ → regular block comment
+                    } else {
+                        self.advance(); // skip second '*'
+                        true
+                    }
+                } else {
+                    false
+                };
+                // Consume until */
+                loop {
+                    match self.peek_char() {
+                        None => break,
+                        Some((_, '*')) => {
+                            self.advance();
+                            if let Some((_, '/')) = self.peek_char() {
+                                self.advance();
+                                break;
+                            }
+                        }
+                        Some(_) => {
+                            self.advance();
+                        }
                     }
                 }
-                Some(_) => {
-                    self.advance();
-                }
+                let span = self.span_since(start);
+                let text = self.input[start..*self.offset.borrow()].to_string();
+                Some(Token::new(
+                    if is_doc {
+                        TokenKind::DocBlockComment(text)
+                    } else {
+                        TokenKind::BlockComment(text)
+                    },
+                    span,
+                ))
             }
+            _ => None,
         }
     }
 
@@ -649,8 +705,34 @@ mod tests {
         let tokens = tokenize("a /* comment */ b // line comment\nc");
         let kinds: Vec<_> = tokens.iter().map(|t| t.kind.clone()).collect();
         assert!(matches!(&kinds[0], TokenKind::Ident(s) if s == "a"));
-        assert!(matches!(&kinds[1], TokenKind::Ident(s) if s == "b"));
-        assert!(matches!(&kinds[2], TokenKind::Ident(s) if s == "c"));
+        assert!(matches!(&kinds[1], TokenKind::BlockComment(s) if s == "/* comment */"));
+        assert!(matches!(&kinds[2], TokenKind::Ident(s) if s == "b"));
+        assert!(matches!(&kinds[3], TokenKind::LineComment(s) if s == "// line comment\n"));
+        assert!(matches!(&kinds[4], TokenKind::Ident(s) if s == "c"));
+    }
+
+    #[test]
+    fn test_doc_comments() {
+        let tokens = tokenize("/** doc */ /// doc line\na");
+        let kinds: Vec<_> = tokens.iter().map(|t| t.kind.clone()).collect();
+        assert!(matches!(&kinds[0], TokenKind::DocBlockComment(s) if s == "/** doc */"));
+        assert!(matches!(&kinds[1], TokenKind::DocLineComment(s) if s == "/// doc line\n"));
+        assert!(matches!(&kinds[2], TokenKind::Ident(s) if s == "a"));
+    }
+
+    #[test]
+    fn test_not_doc_comments() {
+        // //// is not a doc comment
+        let tokens = tokenize("//// not doc\na");
+        let kinds: Vec<_> = tokens.iter().map(|t| t.kind.clone()).collect();
+        assert!(matches!(&kinds[0], TokenKind::LineComment(_)));
+        assert!(matches!(&kinds[1], TokenKind::Ident(s) if s == "a"));
+
+        // /**/ is not a doc comment
+        let tokens = tokenize("/**/ a");
+        let kinds: Vec<_> = tokens.iter().map(|t| t.kind.clone()).collect();
+        assert!(matches!(&kinds[0], TokenKind::BlockComment(s) if s == "/**/"));
+        assert!(matches!(&kinds[1], TokenKind::Ident(s) if s == "a"));
     }
 
     #[test]

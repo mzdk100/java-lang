@@ -27,19 +27,15 @@ fn find_android_sdk_sources() -> Option<PathBuf> {
                 let mut highest_api = 0;
                 let mut best_match = None;
                 for entry in entries.flatten() {
-                    if let Ok(meta) = entry.metadata() {
-                        if meta.is_dir() {
-                            if let Some(name) = entry.file_name().to_str() {
-                                if let Ok(api) =
-                                    name.strip_prefix("android-").unwrap_or(name).parse::<u32>()
-                                {
-                                    if api > highest_api {
-                                        highest_api = api;
-                                        best_match = Some(entry.path());
-                                    }
-                                }
-                            }
-                        }
+                    if let Ok(meta) = entry.metadata()
+                        && meta.is_dir()
+                        && let Some(name) = entry.file_name().to_str()
+                        && let Ok(api) =
+                            name.strip_prefix("android-").unwrap_or(name).parse::<u32>()
+                        && api > highest_api
+                    {
+                        highest_api = api;
+                        best_match = Some(entry.path());
                     }
                 }
                 if let Some(path) = best_match {
@@ -157,22 +153,15 @@ fn test_android_sdk_sources() {
                 eprintln!("FAILED: {} - {}", rel_path.display(), error_msg);
 
                 // Try to read the file and show context around the error
-                if let Ok(content) = std::fs::read_to_string(path) {
-                    // Extract byte offset from error message
-                    if let Some(offset_str) = error_msg.split("byte offset ").nth(1) {
-                        if let Some(offset_end) = offset_str.find(' ') {
-                            if let Ok(offset) = offset_str[..offset_end].parse::<usize>() {
-                                let start = if offset > 200 { offset - 200 } else { 0 };
-                                let end = if offset + 200 < content.len() {
-                                    offset + 200
-                                } else {
-                                    content.len()
-                                };
-                                eprintln!("  Context around error:");
-                                eprintln!("  {}", &content[start..end].replace('\n', "\\n"));
-                            }
-                        }
-                    }
+                if let Ok(content) = std::fs::read_to_string(path)
+                    && let Some(offset_str) = error_msg.split("byte offset ").nth(1)
+                    && let Some(offset_end) = offset_str.find(' ')
+                    && let Ok(offset) = offset_str[..offset_end].parse::<usize>()
+                {
+                    let start = offset.saturating_sub(200);
+                    let end = (offset + 200).min(content.len());
+                    eprintln!("  Context around error:");
+                    eprintln!("  {}", &content[start..end].replace('\n', "\\n"));
                 }
 
                 errors.push((rel_path.to_path_buf(), error_msg));

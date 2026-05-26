@@ -29,11 +29,11 @@ pub enum Annotation {
 impl Annotation {
     pub fn span(&self) -> Span {
         match self {
-            Annotation::Marker { at_token, name } => at_token.join(name.span),
-            Annotation::SingleElement {
+            Self::Marker { at_token, name } => at_token.join(name.span),
+            Self::SingleElement {
                 at_token, value, ..
             } => at_token.join(value.span()),
-            Annotation::Normal {
+            Self::Normal {
                 at_token,
                 paren_span,
                 ..
@@ -43,9 +43,9 @@ impl Annotation {
 
     pub fn path(&self) -> &Path {
         match self {
-            Annotation::Marker { name, .. } => name,
-            Annotation::SingleElement { name, .. } => name,
-            Annotation::Normal { name, .. } => name,
+            Self::Marker { name, .. } => name,
+            Self::SingleElement { name, .. } => name,
+            Self::Normal { name, .. } => name,
         }
     }
 }
@@ -76,9 +76,9 @@ pub enum ElementValue {
 impl ElementValue {
     pub fn span(&self) -> Span {
         match self {
-            ElementValue::Expr(e) => e.span(),
-            ElementValue::Array { brace_span, .. } => brace_span.0.join(brace_span.1),
-            ElementValue::Annotation(a) => a.span(),
+            Self::Expr(e) => e.span(),
+            Self::Array { brace_span, .. } => brace_span.0.join(brace_span.1),
+            Self::Annotation(a) => a.span(),
         }
     }
 }

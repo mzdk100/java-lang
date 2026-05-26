@@ -2,7 +2,7 @@
 
 use crate::{ast::path::Path, ident::Ident, span::Span};
 
-use super::{attribute::Annotation, item::TypeDecl};
+use super::{Comment, attribute::Annotation, item::TypeDecl};
 
 /// A Java compilation unit (a single source file).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -15,6 +15,8 @@ pub struct CompilationUnit {
     pub type_decls: Vec<TypeDecl>,
     /// The module declaration, if present (for module-info.java).
     pub module: Option<super::item::ModuleDecl>,
+    /// All comments in the source file.
+    pub comments: Vec<Comment>,
 }
 
 impl CompilationUnit {
@@ -94,22 +96,22 @@ pub enum ImportDecl {
 impl ImportDecl {
     pub fn span(&self) -> Span {
         match self {
-            ImportDecl::SingleType {
+            Self::SingleType {
                 import_span,
                 semi_span,
                 ..
             }
-            | ImportDecl::TypeOnDemand {
+            | Self::TypeOnDemand {
                 import_span,
                 semi_span,
                 ..
             }
-            | ImportDecl::SingleStatic {
+            | Self::SingleStatic {
                 import_span,
                 semi_span,
                 ..
             }
-            | ImportDecl::StaticOnDemand {
+            | Self::StaticOnDemand {
                 import_span,
                 semi_span,
                 ..

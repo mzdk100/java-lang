@@ -141,31 +141,28 @@ public class Example {
 
     println!("\nType declarations ({}):", unit.type_decls.len());
     for td in &unit.type_decls {
-        match td {
-            java_lang::ast::TypeDecl::Class(cls) => {
-                println!("  class {} ({:?})", cls.name, cls.name.span);
-                for modifier in &cls.modifiers {
-                    println!("    modifier: {:?}", modifier);
-                }
-                for member in &cls.body.declarations {
-                    match member {
-                        java_lang::ast::ClassBodyDecl::Field(f) => {
-                            for d in &f.declarators {
-                                let name = d.name.as_ref().map(|n| n.name.as_str()).unwrap_or("_");
-                                println!("    field: {} (type: {:?})", name, f.ty);
-                            }
+        if let java_lang::ast::TypeDecl::Class(cls) = td {
+            println!("  class {} ({:?})", cls.name, cls.name.span);
+            for modifier in &cls.modifiers {
+                println!("    modifier: {:?}", modifier);
+            }
+            for member in &cls.body.declarations {
+                match member {
+                    java_lang::ast::ClassBodyDecl::Field(f) => {
+                        for d in &f.declarators {
+                            let name = d.name.as_ref().map(|n| n.name.as_str()).unwrap_or("_");
+                            println!("    field: {} (type: {:?})", name, f.ty);
                         }
-                        java_lang::ast::ClassBodyDecl::Method(m) => {
-                            println!("    method: {} (params: {})", m.name, m.params.len());
-                        }
-                        java_lang::ast::ClassBodyDecl::Constructor(c) => {
-                            println!("    constructor: {} (params: {})", c.name, c.params.len());
-                        }
-                        _ => {}
                     }
+                    java_lang::ast::ClassBodyDecl::Method(m) => {
+                        println!("    method: {} (params: {})", m.name, m.params.len());
+                    }
+                    java_lang::ast::ClassBodyDecl::Constructor(c) => {
+                        println!("    constructor: {} (params: {})", c.name, c.params.len());
+                    }
+                    _ => {}
                 }
             }
-            _ => {}
         }
     }
 }
