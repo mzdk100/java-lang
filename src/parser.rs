@@ -1341,24 +1341,18 @@ fn parse_record_body_decl(input: &ParseStream) -> Result<RecordBodyDecl> {
     let doc_comment = input.collect_pending_doc_comments();
     let modifiers = parse_modifiers(input);
 
-    // Check for compact constructor
-    if input.is_any_ident() {
-        let saved = input.cursor();
-        let name = input.parse_ident().ok();
-        if let Some(name) = name {
-            if input.is(&TokenKind::LBrace) {
-                let body = parse_constructor_body(input)?;
-                return Ok(RecordBodyDecl::CompactConstructor(CompactConstructorDecl {
-                    doc_comment,
-                    modifiers,
-                    name,
-                    body,
-                }));
-            }
-            input.set_cursor(saved);
-        } else {
-            input.set_cursor(saved);
-        }
+    // Check for compact constructor: Name { ... }
+    // A compact constructor has the same name as the record and no parameter list.
+    // Lookahead: IDENT followed directly by `{` (not `(`)
+    if input.is_any_ident() && input.look_ahead(1).kind == TokenKind::LBrace {
+        let name = input.parse_ident()?;
+        let body = parse_constructor_body(input)?;
+        return Ok(RecordBodyDecl::CompactConstructor(CompactConstructorDecl {
+            doc_comment,
+            modifiers,
+            name,
+            body,
+        }));
     }
 
     match &input.peek().kind {
@@ -1472,11 +1466,52 @@ fn parse_record_body_decl_with_mods(
             declarators,
             semi_span,
         }))
+    } else if input.is(&TokenKind::LParen) {
+        // Constructor: the parsed "type" is actually the constructor name (e.g., record name)
+        // Extract the name from the type path
+        let name = extract_constructor_name_from_type(&ty)?;
+        input.expect(TokenKind::LParen)?;
+        let open = input.peek().span;
+        let params = parse_formal_params_after_lparen(input)?;
+        let throws_clause = parse_throws_clause(input)?;
+        let body = parse_constructor_body(input)?;
+        Ok(RecordBodyDecl::Constructor(ConstructorDecl {
+            doc_comment,
+            modifiers,
+            type_params,
+            name,
+            receiver_param: None,
+            params,
+            paren_span: (open, input.peek().span),
+            throws_clause,
+            body,
+        }))
     } else {
         Err(crate::error::Error::new(
             input.peek().span,
             "expected record body member",
         ))
+    }
+}
+
+/// Extract an identifier from a type that represents a constructor name.
+/// The type must be a simple reference type with a single path segment (e.g., `Args`).
+fn extract_constructor_name_from_type(ty: &Type) -> Result<Ident> {
+    match ty {
+        Type::Reference(ReferenceType::ClassOrInterfaceType(cty)) => {
+            if cty.path.segments.len() == 1 && cty.path.segments[0].args.is_none() {
+                Ok(cty.path.segments[0].ident.clone())
+            } else {
+                Err(crate::error::Error::new(
+                    cty.path.span,
+                    "expected simple identifier for constructor name",
+                ))
+            }
+        }
+        _ => Err(crate::error::Error::new(
+            ty.span(),
+            "expected simple identifier for constructor name",
+        )),
     }
 }
 
@@ -2425,9 +2460,10 @@ fn parse_case_value(input: &ParseStream) -> Result<Expr> {
             }
             offset += 1;
         }
-        // offset now points to matching `)`. Check if `IDENTIFIER ->` follows.
+        // offset now points to matching `)`. Check what follows.
         let after_rparen = &input.look_ahead(offset + 1).kind;
         let after_that = &input.look_ahead(offset + 2).kind;
+
         if is_any_ident_kind(after_rparen) && matches!(after_that, TokenKind::Arrow) {
             // Parse as cast: (type) IDENTIFIER, leaving `->` for the switch parser.
             let open_span = input.peek().span;
@@ -2446,6 +2482,22 @@ fn parse_case_value(input: &ParseStream) -> Result<Expr> {
             }
             input.set_cursor(saved);
             // If the targeted parse failed, fall through to general expression parsing
+        }
+
+        // Check for `(expr) ->` in switch case context.
+        // This is a parenthesized case value followed by the arrow, NOT a lambda.
+        // The expression parser would incorrectly parse this as a lambda.
+        if matches!(after_rparen, TokenKind::Arrow) {
+            // Parse as parenthesized expression, leaving `->` for the switch parser.
+            let open_span = input.peek().span;
+            input.next(); // consume `(`
+            let inner = parse_expression(input)?;
+            input.expect(TokenKind::RParen)?;
+            let close_span = input.peek().span;
+            return Ok(Expr::Paren {
+                paren_span: (open_span, close_span),
+                expr: Box::new(inner),
+            });
         }
     }
     parse_expression(input)
@@ -2484,6 +2536,23 @@ fn parse_switch_labels(input: &ParseStream) -> Result<Vec<SwitchCase>> {
                 input.next();
                 labels.push(SwitchCase::Default { default_span });
                 break;
+            } else if is_case_pattern(input) {
+                // Java 21 pattern matching: case Type name -> or case Type(...) ->
+                let pattern = parse_pattern(input)?;
+                let guard = if input.is(&TokenKind::When) {
+                    let when_span = input.peek().span;
+                    input.next();
+                    let expr = parse_expression(input)?;
+                    Some(Guard { when_span, expr })
+                } else {
+                    None
+                };
+                labels.push(SwitchCase::CasePattern {
+                    case_span,
+                    pattern,
+                    guard: Box::new(guard),
+                });
+                break;
             } else {
                 let mut values = Vec::new();
                 values.push(parse_case_value(input)?);
@@ -2516,6 +2585,25 @@ fn parse_switch_labels(input: &ParseStream) -> Result<Vec<SwitchCase>> {
         }
     }
     Ok(labels)
+}
+
+/// Check if the current position in a switch case is a pattern (Java 21+).
+/// Patterns are: `Type name` (type pattern) or `Type(...)` (record pattern).
+/// Returns false for simple constant values like `case FOO`.
+fn is_case_pattern(input: &ParseStream) -> bool {
+    // Must start with an identifier (the type)
+    if !input.is_any_ident() {
+        return false;
+    }
+    let next = input.look_ahead(1);
+    match &next.kind {
+        // Type pattern: `case Triangle t`
+        TokenKind::Ident(_) => true,
+        // Record pattern: `case Pair(...)`
+        TokenKind::LParen => true,
+        // Not a pattern: `case CONSTANT` or `case CONSTANT ->`
+        _ => false,
+    }
 }
 
 fn parse_while_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {

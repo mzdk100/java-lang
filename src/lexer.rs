@@ -126,8 +126,7 @@ impl<'a> Lexer<'a> {
                 let is_doc = if self.peek_char().map(|(_, c)| c) == Some('*') {
                     // Check if it's /**/ (empty block comment, not doc)
                     let star_offset = *self.offset.borrow() + '*'.len_utf8();
-                    if star_offset < self.input.len()
-                        && self.input[star_offset..].starts_with('/')
+                    if star_offset < self.input.len() && self.input[star_offset..].starts_with('/')
                     {
                         false // /**/ → regular block comment
                     } else {
@@ -448,6 +447,23 @@ impl<'a> Lexer<'a> {
                             }
                             _ => break,
                         }
+                    }
+                    // Check for hex float exponent (p/P) even without a decimal point
+                    // e.g., 0x1p-24f, 0x1P10
+                    if let Some((_, 'p' | 'P')) = self.peek_char() {
+                        num.push(self.advance()?);
+                        if let Some((_, '+' | '-')) = self.peek_char() {
+                            num.push(self.advance()?);
+                        }
+                        while let Some((_, ch)) = self.peek_char() {
+                            if ch.is_ascii_digit() || ch == '_' {
+                                num.push(ch);
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                        return self.finish_number(start, num, true);
                     }
                     return self.finish_number(start, num, false);
                 }

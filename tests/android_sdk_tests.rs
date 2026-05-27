@@ -13,25 +13,18 @@ use walkdir::WalkDir;
 fn find_android_sdk_sources() -> Option<PathBuf> {
     // Try ANDROID_HOME environment variable first
     if let Ok(android_home) = std::env::var("ANDROID_HOME") {
-        let sources = PathBuf::from(&android_home)
-            .join("sources")
-            .join("android-35");
-        if sources.exists() {
-            return Some(sources);
-        }
-        // Try other API levels
         let sources_dir = PathBuf::from(&android_home).join("sources");
         if sources_dir.exists() {
             // Find the highest API level
             if let Ok(entries) = std::fs::read_dir(&sources_dir) {
-                let mut highest_api = 0;
+                let mut highest_api = 0.0;
                 let mut best_match = None;
                 for entry in entries.flatten() {
                     if let Ok(meta) = entry.metadata()
                         && meta.is_dir()
                         && let Some(name) = entry.file_name().to_str()
-                        && let Ok(api) =
-                            name.strip_prefix("android-").unwrap_or(name).parse::<u32>()
+                        && let Some(api_str) = name.strip_prefix("android-")
+                        && let Ok(api) = api_str.parse::<f64>()
                         && api > highest_api
                     {
                         highest_api = api;
