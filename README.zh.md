@@ -30,7 +30,7 @@
 
 ```toml
 [dependencies]
-java-lang = "0.1.0"
+java-lang = "0.2"
 ```
 
 解析 Java 源代码：
