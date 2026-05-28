@@ -26,11 +26,10 @@
 
 ## 快速开始
 
-在 `Cargo.toml` 中添加：
+使用 `cargo add` 安装：
 
-```toml
-[dependencies]
-java-lang = "0.2"
+```bash
+cargo add java-lang
 ```
 
 解析 Java 源代码：

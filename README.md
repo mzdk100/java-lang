@@ -26,11 +26,10 @@ A Java 25 AST parser written in Rust, with a [syn](https://docs.rs/syn)-style AP
 
 ## Quick Start
 
-Add to your `Cargo.toml`:
+Install with `cargo add`:
 
-```toml
-[dependencies]
-java-lang = "0.2"
+```bash
+cargo add java-lang
 ```
 
 Parse a Java source file:
