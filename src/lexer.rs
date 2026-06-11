@@ -188,7 +188,8 @@ impl<'a> Lexer<'a> {
         match ch {
             '"' => {
                 if self.input[start + 1..].starts_with("\"\"") {
-                    *self.offset.borrow_mut() = start + 3;
+                    self.advance(); // consume second "
+                    self.advance(); // consume third "
                     return Some(self.scan_text_block(start));
                 }
                 Some(self.scan_string(start))
@@ -755,5 +756,30 @@ mod tests {
     fn test_text_block() {
         let tokens = tokenize("\"\"\"\nhello\n\"\"\"");
         assert!(matches!(&tokens[0].kind, TokenKind::StringLit(_)));
+    }
+
+    #[test]
+    fn test_text_block_followed_by_block_comment() {
+        // Regression: text block must not desync offset and chars iterator.
+        // Previously, the text block code manually set self.offset without
+        // advancing self.chars, causing a desync that could panic when a
+        // block comment was parsed later (begin > end when slicing).
+        let input = "\"\"\"\nhello\n\"\"\" /* block comment */";
+        let tokens = tokenize(input);
+        let kinds: Vec<_> = tokens.iter().map(|t| t.kind.clone()).collect();
+        assert!(matches!(&kinds[0], TokenKind::StringLit(s) if s == "hello\n"));
+        assert!(matches!(&kinds[1], TokenKind::BlockComment(s) if s == "/* block comment */"));
+    }
+
+    #[test]
+    fn test_text_block_content_correctness() {
+        // Verify text block content does not include spurious quotes from
+        // the opening delimiter (another symptom of the offset desync).
+        let tokens = tokenize("\"\"\"\nworld\n\"\"\"");
+        if let TokenKind::StringLit(s) = &tokens[0].kind {
+            assert_eq!(s, "world\n");
+        } else {
+            panic!("expected StringLit");
+        }
     }
 }
