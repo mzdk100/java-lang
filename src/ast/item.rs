@@ -396,6 +396,15 @@ pub enum MethodReturnType {
     Void(Span),
 }
 
+impl From<Type> for MethodReturnType {
+    fn from(ty: Type) -> Self {
+        match ty {
+            Type::Void(span) => MethodReturnType::Void(span),
+            other => MethodReturnType::Type(other),
+        }
+    }
+}
+
 /// A receiver parameter: `Type [name.] this`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ReceiverParameter {
