@@ -428,6 +428,8 @@ pub enum FormalParameter {
     VarArgs {
         modifiers: Vec<Modifier>,
         ty: Type,
+        /// Type-use annotations between `ty` and the `...` (JLS §8.4.1).
+        trailing_annotations: Vec<Annotation>,
         ellipsis_span: Span,
         name: Option<Ident>,
     },

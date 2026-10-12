@@ -27,7 +27,7 @@ fn accepts(source: &str) {
 /// Source: <https://github.com/spring-projects/spring-boot/blob/bd0300809876f7aeec5e3638a487c8c46a3219ec/core/spring-boot/src/main/java/org/springframework/boot/context/properties/bind/Bindable.java#L183>.
 #[test]
 fn bug_01_varargs_annotation() {
-    rejects(
+    accepts(
         r#"class Foo {
     static String bar(Object @Nullable ... args) {
         return null;

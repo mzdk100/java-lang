@@ -938,12 +938,14 @@ fn parse_formal_params_after_lparen(input: &ParseStream) -> Result<Vec<FormalPar
             ty
         };
 
+        let trailing_annotations = parse_type_annotations(input);
         if input.eat(&TokenKind::Ellipsis) {
             let ellipsis_span = input.peek().span;
             let name = input.parse_ident().ok();
             params.push(FormalParameter::VarArgs {
                 modifiers,
                 ty,
+                trailing_annotations,
                 ellipsis_span,
                 name,
             });
