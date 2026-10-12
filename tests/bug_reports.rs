@@ -47,7 +47,7 @@ fn bug_01_varargs_annotation() {
 /// Source: <https://github.com/spring-projects/spring-boot/blob/bd0300809876f7aeec5e3638a487c8c46a3219ec/loader/spring-boot-loader/src/main/java/org/springframework/boot/loader/launch/PropertiesLauncher.java#L597>.
 #[test]
 fn bug_02_record_varargs() {
-    rejects(
+    accepts(
         r#"record Foo(Object... elements) {
 }
 "#,

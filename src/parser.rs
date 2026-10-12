@@ -1278,9 +1278,9 @@ fn parse_record_decl(
     while !input.is(&TokenKind::RParen) && !input.is_empty() {
         let annotations = parse_annotations(input)?;
         let ty = parse_type(input)?;
-        let name = input.parse_ident()?;
         if input.eat(&TokenKind::Ellipsis) {
             let ellipsis_span = input.peek().span;
+            let name = input.parse_ident()?;
             components.push(RecordComponent::VarArgs {
                 annotations,
                 ty,
@@ -1288,6 +1288,7 @@ fn parse_record_decl(
                 name,
             });
         } else {
+            let name = input.parse_ident()?;
             components.push(RecordComponent::Normal {
                 annotations,
                 ty,
