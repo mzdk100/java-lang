@@ -61,7 +61,7 @@ fn bug_02_record_varargs() {
 /// Source: <https://github.com/junit-team/junit5/blob/1ef55a6a9a2430ae274165bfcc4251d5e147b803/junit-platform-engine/src/main/java/module-info.java#L21>.
 #[test]
 fn bug_03_requires_order() {
-    rejects(
+    accepts(
         r#"module org.example {
     requires static transitive org.apiguardian.api;
 }

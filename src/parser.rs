@@ -219,11 +219,12 @@ fn parse_module_directive(input: &ParseStream) -> Result<ModuleDirective> {
             input.next();
             let requires_span = span;
             let mut modifiers = Vec::new();
-            while input.is(&TokenKind::Transitive) {
-                modifiers.push(RequiresModifier::Transitive(input.next().span));
-            }
-            if input.is(&TokenKind::Static) {
-                modifiers.push(RequiresModifier::Static(input.next().span));
+            while let Some(modifier) = match &input.peek().kind {
+                TokenKind::Transitive => Some(RequiresModifier::Transitive(input.next().span)),
+                TokenKind::Static => Some(RequiresModifier::Static(input.next().span)),
+                _ => None,
+            } {
+                modifiers.push(modifier);
             }
             let module = parse_path(input)?;
             input.expect(TokenKind::Semicolon)?;
