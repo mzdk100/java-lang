@@ -76,7 +76,7 @@ fn bug_03_requires_order() {
 /// Source: <https://github.com/junit-team/junit5/blob/1ef55a6a9a2430ae274165bfcc4251d5e147b803/junit-vintage-engine/src/main/java/module-info.java#L19>.
 #[test]
 fn bug_04_module_annotation() {
-    rejects(
+    accepts(
         r#"@SuppressWarnings("deprecation")
 module org.example {
 }

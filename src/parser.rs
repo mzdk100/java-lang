@@ -45,11 +45,14 @@ impl Parse for CompilationUnit {
             }
             // Collect doc comments before the declaration
             let doc_comment = input.collect_pending_doc_comments();
-            if input.is_ident("module") || input.is(&TokenKind::Open) {
-                let mut mod_decl: ModuleDecl = input.parse()?;
-                mod_decl.doc_comment = doc_comment;
-                module = Some(mod_decl);
-                continue;
+            if input.is(&TokenKind::At) || input.is_ident("module") || input.is(&TokenKind::Open) {
+                let saved = input.cursor();
+                if let Some(mut mod_decl) = input.try_parse(ModuleDecl::parse) {
+                    mod_decl.doc_comment = doc_comment;
+                    module = Some(mod_decl);
+                    continue;
+                }
+                input.set_cursor(saved);
             }
             // Type declaration
             let mut type_decl: TypeDecl = input.parse()?;
