@@ -524,6 +524,23 @@ fn test_method_reference_qualified_generic_target() {
 }
 
 #[test]
+fn test_qualified_constructor_reference_multi_segment_path() {
+    let _cu: CompilationUnit = parse_str(
+        "class Foo { void bar() {
+            x = Builder<K, V>::new;             // single-segment path
+            y = ImmutableMap.Builder<K, V>::new; // multi-segment path
+        } }",
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_qualified_method_reference_multi_segment_path() {
+    let _cu: CompilationUnit =
+        parse_str("class Foo { void bar() { z = Map.Entry<String, Long>::getValue; } }").unwrap();
+}
+
+#[test]
 fn test_method_reference_array_type_target() {
     let _cu: CompilationUnit =
         parse_str("class Foo { void m() { var r = java.util.List<?>[]::new; } }").unwrap();
@@ -550,6 +567,16 @@ fn test_lt_and_method_ref_disambiguation() {
         "class Foo { void bar() { Runnable r = String::new; } }",
         "class Foo { void bar() { Runnable r = int[]::new; } }",
         "class Foo { void bar() { Runnable r = ArrayList<String>::new; } }",
+    ] {
+        parse_str::<CompilationUnit>(src).unwrap();
+    }
+}
+
+#[test]
+fn test_explicit_type_witness_with_nested_generics() {
+    for src in [
+        "class Foo { void bar() { a.<B<C>>m(); } }",
+        "class Foo { void bar() { a.<B<C<D>>>m(); } }",
     ] {
         parse_str::<CompilationUnit>(src).unwrap();
     }
@@ -587,6 +614,26 @@ fn test_module_declaration() {
     assert!(module(&cu).is_some());
     let mod_decl = module(&cu).unwrap().clone();
     assert_eq!(mod_decl.directives.len(), 2);
+}
+
+#[test]
+fn test_module_requires_static_transitive_order() {
+    let _cu: CompilationUnit = parse_str(
+        "module org.example { requires static transitive org.apiguardian.api; }",
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_annotated_module_declaration() {
+    let _cu: CompilationUnit =
+        parse_str("@SuppressWarnings(\"deprecation\") module org.example { }").unwrap();
+}
+
+#[test]
+fn test_module_import_declaration() {
+    let _cu: CompilationUnit =
+        parse_str("import module org.junit.jupiter.api;\n\nclass Foo {\n}\n").unwrap();
 }
 
 #[test]
@@ -666,6 +713,18 @@ fn test_varargs() {
 }
 
 #[test]
+fn test_varargs_with_type_use_annotation() {
+    let _cu: CompilationUnit =
+        parse_str("class Foo { static String bar(Object @Nullable ... args) { return null; } }")
+            .unwrap();
+}
+
+#[test]
+fn test_record_varargs_component() {
+    let _cu: CompilationUnit = parse_str("record Foo(Object... elements) {}").unwrap();
+}
+
+#[test]
 fn test_throws_clause() {
     let _cu: CompilationUnit =
         parse_str("class Foo { void m() throws IOException, SQLException { } }").unwrap();
@@ -682,6 +741,14 @@ fn test_wildcard_type() {
     let _cu: CompilationUnit =
         parse_str("class Foo { java.util.List<?> list; java.util.List<? extends Number> nums; }")
             .unwrap();
+}
+
+#[test]
+fn test_wildcard_type_with_type_use_annotation() {
+    let _cu: CompilationUnit = parse_str(
+        "class Foo { ImmutableList<@UnknownKeyFor ? extends Bar> x; }",
+    )
+    .unwrap();
 }
 
 #[test]
