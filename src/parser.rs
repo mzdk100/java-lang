@@ -1827,8 +1827,7 @@ fn parse_type(input: &ParseStream) -> Result<Type> {
     }
 
     let base = if is_primitive_type_token(&input.peek().kind) {
-        let (prim, prim_span) = parse_primitive_type(input)?;
-        Type::Primitive(prim, prim_span)
+        Type::Primitive(parse_primitive_type(input)?)
     } else if input.is_any_ident() || is_contextual_type_keyword(&input.peek().kind) {
         let path = parse_path(input)?;
         Type::Reference(ReferenceType::ClassOrInterfaceType(ClassOrInterfaceType {
@@ -2027,17 +2026,17 @@ fn is_primitive_type_token(kind: &TokenKind) -> bool {
     )
 }
 
-fn parse_primitive_type(input: &ParseStream) -> Result<(PrimitiveType, Span)> {
+fn parse_primitive_type(input: &ParseStream) -> Result<PrimitiveType> {
     let span = input.peek().span;
-    let prim = match &input.peek().kind {
-        TokenKind::Byte => PrimitiveType::Byte,
-        TokenKind::Short => PrimitiveType::Short,
-        TokenKind::Int => PrimitiveType::Int,
-        TokenKind::Long => PrimitiveType::Long,
-        TokenKind::Char => PrimitiveType::Char,
-        TokenKind::Float => PrimitiveType::Float,
-        TokenKind::Double => PrimitiveType::Double,
-        TokenKind::Boolean => PrimitiveType::Boolean,
+    let kind = match &input.peek().kind {
+        TokenKind::Byte => PrimitiveTypeKind::Byte,
+        TokenKind::Short => PrimitiveTypeKind::Short,
+        TokenKind::Int => PrimitiveTypeKind::Int,
+        TokenKind::Long => PrimitiveTypeKind::Long,
+        TokenKind::Char => PrimitiveTypeKind::Char,
+        TokenKind::Float => PrimitiveTypeKind::Float,
+        TokenKind::Double => PrimitiveTypeKind::Double,
+        TokenKind::Boolean => PrimitiveTypeKind::Boolean,
         _ => {
             return Err(crate::error::Error::new(
                 input.peek().span,
@@ -2046,7 +2045,7 @@ fn parse_primitive_type(input: &ParseStream) -> Result<(PrimitiveType, Span)> {
         }
     };
     input.next();
-    Ok((prim, span))
+    Ok(PrimitiveType { kind, span })
 }
 fn parse_array_dims(input: &ParseStream) -> Result<Vec<ArrayDim>> {
     let mut dims = Vec::new();
@@ -3841,14 +3840,38 @@ fn parse_postfix_expr_impl(input: &ParseStream, stop_before_super_call: bool) ->
 fn expr_to_type(expr: &Expr) -> Result<Type> {
     match expr {
         Expr::Ident(i) => match i.name.as_str() {
-            "byte" => Ok(Type::Primitive(PrimitiveType::Byte, i.span())),
-            "short" => Ok(Type::Primitive(PrimitiveType::Short, i.span())),
-            "int" => Ok(Type::Primitive(PrimitiveType::Int, i.span())),
-            "long" => Ok(Type::Primitive(PrimitiveType::Long, i.span())),
-            "char" => Ok(Type::Primitive(PrimitiveType::Char, i.span())),
-            "float" => Ok(Type::Primitive(PrimitiveType::Float, i.span())),
-            "double" => Ok(Type::Primitive(PrimitiveType::Double, i.span())),
-            "boolean" => Ok(Type::Primitive(PrimitiveType::Boolean, i.span())),
+            "byte" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Byte,
+                span: i.span(),
+            })),
+            "short" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Short,
+                span: i.span(),
+            })),
+            "int" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Int,
+                span: i.span(),
+            })),
+            "long" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Long,
+                span: i.span(),
+            })),
+            "char" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Char,
+                span: i.span(),
+            })),
+            "float" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Float,
+                span: i.span(),
+            })),
+            "double" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Double,
+                span: i.span(),
+            })),
+            "boolean" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Boolean,
+                span: i.span(),
+            })),
             "void" => Ok(Type::Void(i.span())),
             _ => Ok(Type::Reference(ReferenceType::ClassOrInterfaceType(
                 ClassOrInterfaceType {
@@ -4225,8 +4248,7 @@ fn parse_new_expr(input: &ParseStream) -> Result<Expr> {
     // Parse the element/base type WITHOUT consuming array dimensions
     let annotations = parse_type_annotations(input);
     let base_type = if is_primitive_type_token(&input.peek().kind) {
-        let (prim, prim_span) = parse_primitive_type(input)?;
-        Type::Primitive(prim, prim_span)
+        Type::Primitive(parse_primitive_type(input)?)
     } else if input.is_any_ident() || is_contextual_type_keyword(&input.peek().kind) {
         let path = parse_path(input)?;
         Type::Reference(ReferenceType::ClassOrInterfaceType(ClassOrInterfaceType {

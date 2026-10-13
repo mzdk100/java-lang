@@ -11,7 +11,7 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     /// A primitive type: `int`, `boolean`, etc.
-    Primitive(PrimitiveType, Span),
+    Primitive(PrimitiveType),
     /// A reference type: class, interface, type variable, or array.
     Reference(ReferenceType),
     /// The `void` type (only used in method return types).
@@ -21,7 +21,7 @@ pub enum Type {
 impl Type {
     pub fn span(&self) -> Span {
         match self {
-            Self::Primitive(_, s) => *s,
+            Self::Primitive(p) => p.span,
             Self::Reference(r) => r.span(),
             Self::Void(s) => *s,
         }
@@ -34,13 +34,20 @@ impl Type {
 
     /// Check if this is a primitive type.
     pub fn is_primitive(&self) -> bool {
-        matches!(self, Self::Primitive(_, _))
+        matches!(self, Self::Primitive(_))
     }
 }
 
 /// A primitive Java type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PrimitiveType {
+pub struct PrimitiveType {
+    pub kind: PrimitiveTypeKind,
+    pub span: Span,
+}
+
+/// The kind of a primitive Java type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PrimitiveTypeKind {
     Byte,
     Short,
     Int,
@@ -51,7 +58,7 @@ pub enum PrimitiveType {
     Boolean,
 }
 
-impl PrimitiveType {
+impl PrimitiveTypeKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Byte => "byte",
@@ -63,10 +70,6 @@ impl PrimitiveType {
             Self::Double => "double",
             Self::Boolean => "boolean",
         }
-    }
-
-    pub fn span(&self) -> Span {
-        Span::call_site() // Primitive types are keywords, spans are set at the Type level
     }
 }
 
