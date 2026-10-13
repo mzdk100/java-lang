@@ -464,6 +464,7 @@ pub fn keyword_to_token(s: &str) -> Option<TokenKind> {
         "while" => Some(TokenKind::While),
         "_" => Some(TokenKind::Underscore),
         // Contextual keywords
+        "module" => Some(TokenKind::Module),
         "open" => Some(TokenKind::Open),
         "opens" => Some(TokenKind::Opens),
         "exports" => Some(TokenKind::Exports),

@@ -18,7 +18,17 @@ impl Parse for CompilationUnit {
         let mut package = None;
         let mut imports = Vec::new();
         let mut module = None;
-        let mut type_decls = Vec::new();
+        // Top-level class/interface/enum/record/annotation-type declarations seen so
+        // far. Kept separate from `implicit_members` until we know whether this is an
+        // OrdinaryCompilationUnit or a CompactCompilationUnit (JLS §7.3): a compact
+        // unit's members include any such declarations seen anywhere in the file, not
+        // just the ones after the first field/method.
+        let mut type_decls: Vec<TypeDecl> = Vec::new();
+        let mut implicit_members: Vec<ClassBodyDecl> = Vec::new();
+        let mut is_compact_unit = false;
+        // Whether any member (type declaration or compact-unit member) has been
+        // seen yet. JLS §7.3 requires imports to precede all of them.
+        let mut seen_member = false;
 
         while !input.is_empty() {
             if input.is(&TokenKind::Semicolon) {
@@ -26,7 +36,12 @@ impl Parse for CompilationUnit {
                 input.collect_pending_comments();
                 let sp = input.peek().span;
                 input.next();
-                type_decls.push(TypeDecl::Empty(sp));
+                if is_compact_unit {
+                    implicit_members.push(ClassBodyDecl::Empty(sp));
+                } else {
+                    type_decls.push(TypeDecl::Empty(sp));
+                }
+                seen_member = true;
                 continue;
             }
             if input.is(&TokenKind::At) || input.is(&TokenKind::Package) {
@@ -40,33 +55,134 @@ impl Parse for CompilationUnit {
                 input.set_cursor(saved);
             }
             if input.is(&TokenKind::Import) {
+                if seen_member {
+                    return Err(crate::error::Error::new(
+                        input.peek().span,
+                        "import declarations must precede all type declarations and members",
+                    ));
+                }
                 imports.push(input.parse()?);
                 continue;
             }
             // Collect doc comments before the declaration
             let doc_comment = input.collect_pending_doc_comments();
-            if input.is_ident("module") || input.is(&TokenKind::Open) {
-                let mut mod_decl: ModuleDecl = input.parse()?;
-                mod_decl.doc_comment = doc_comment;
-                module = Some(mod_decl);
-                continue;
+            if input.is(&TokenKind::At)
+                || input.is(&TokenKind::Module)
+                || input.is(&TokenKind::Open)
+            {
+                let saved = input.cursor();
+                if let Some(mut mod_decl) = input.try_parse(ModuleDecl::parse) {
+                    mod_decl.doc_comment = doc_comment;
+                    module = Some(mod_decl);
+                    seen_member = true;
+                    continue;
+                }
+                input.set_cursor(saved);
             }
-            // Type declaration
-            let mut type_decl: TypeDecl = input.parse()?;
-            set_type_decl_doc_comment(&mut type_decl, doc_comment);
-            type_decls.push(type_decl);
+            if !is_compact_unit {
+                // Try an ordinary top-level type declaration first.
+                let saved = input.cursor();
+                if let Some(mut type_decl) = input.try_parse(TypeDecl::parse) {
+                    set_type_decl_doc_comment(&mut type_decl, doc_comment);
+                    type_decls.push(type_decl);
+                    seen_member = true;
+                    continue;
+                }
+                input.set_cursor(saved);
+            }
+            // Compact compilation unit (JLS §7.3, §8.1.8): a top-level method, field,
+            // or nested type with no enclosing class declaration. Constructors and
+            // initializer blocks can never appear at the top level.
+            let mut member = parse_class_body_decl(input)?;
+            if let ClassBodyDecl::Constructor(_)
+            | ClassBodyDecl::StaticInit(_)
+            | ClassBodyDecl::InstanceInit(_) = &member
+            {
+                return Err(crate::error::Error::new(
+                    member.span(),
+                    "constructors and initializer blocks cannot appear at the top level",
+                ));
+            }
+            set_class_body_decl_doc_comment(&mut member, doc_comment);
+            seen_member = true;
+            if !is_compact_unit {
+                // First member not expressible as a top-level type declaration: this
+                // is a compact compilation unit. Every type declaration collected so
+                // far becomes a member of the implicit class too (JLS §7.3).
+                is_compact_unit = true;
+                implicit_members.extend(type_decls.drain(..).map(type_decl_to_class_body_decl));
+            }
+            implicit_members.push(member);
         }
 
         // Collect any remaining comments at the end of the file
         let comments = input.collect_pending_comments();
 
+        let kind = if is_compact_unit {
+            if let Some(pkg) = &package {
+                return Err(crate::error::Error::new(
+                    pkg.span,
+                    "a compact compilation unit cannot have a package declaration",
+                ));
+            }
+            if let Some(m) = &module {
+                return Err(crate::error::Error::new(
+                    m.span(),
+                    "a compact compilation unit cannot have a module declaration",
+                ));
+            }
+            if !implicit_members
+                .iter()
+                .any(|m| matches!(m, ClassBodyDecl::Method(_)))
+            {
+                let span = implicit_members
+                    .last()
+                    .map_or_else(Span::call_site, |m| m.span());
+                return Err(crate::error::Error::new(
+                    span,
+                    "a compact compilation unit must declare at least one method",
+                ));
+            }
+            CompilationUnitKind::Compact(ImplicitClassDecl {
+                members: implicit_members,
+            })
+        } else if let Some(m) = module {
+            if let Some(pkg) = &package {
+                return Err(crate::error::Error::new(
+                    pkg.span,
+                    "a module declaration cannot have a package declaration",
+                ));
+            }
+            if !type_decls.is_empty() {
+                return Err(crate::error::Error::new(
+                    m.span(),
+                    "a module declaration cannot be combined with top-level type declarations",
+                ));
+            }
+            CompilationUnitKind::Modular(m)
+        } else {
+            CompilationUnitKind::Ordinary {
+                package,
+                type_decls,
+            }
+        };
+
         Ok(Self {
             comments,
-            package,
             imports,
-            type_decls,
-            module,
+            kind,
         })
+    }
+}
+
+fn type_decl_to_class_body_decl(decl: TypeDecl) -> ClassBodyDecl {
+    match decl {
+        TypeDecl::Class(c) => ClassBodyDecl::Class(c),
+        TypeDecl::Interface(i) => ClassBodyDecl::Interface(i),
+        TypeDecl::Enum(e) => ClassBodyDecl::Enum(e),
+        TypeDecl::Record(r) => ClassBodyDecl::Record(r),
+        TypeDecl::AnnotationType(a) => ClassBodyDecl::AnnotationType(a),
+        TypeDecl::Empty(s) => ClassBodyDecl::Empty(s),
     }
 }
 
@@ -78,6 +194,22 @@ fn set_type_decl_doc_comment(decl: &mut TypeDecl, doc_comment: Vec<Comment>) {
         TypeDecl::Record(r) => r.doc_comment = doc_comment,
         TypeDecl::AnnotationType(a) => a.doc_comment = doc_comment,
         TypeDecl::Empty(_) => {}
+    }
+}
+
+fn set_class_body_decl_doc_comment(decl: &mut ClassBodyDecl, doc_comment: Vec<Comment>) {
+    match decl {
+        ClassBodyDecl::Field(f) => f.doc_comment = doc_comment,
+        ClassBodyDecl::Method(m) => m.doc_comment = doc_comment,
+        ClassBodyDecl::Constructor(c) => c.doc_comment = doc_comment,
+        ClassBodyDecl::Class(c) => c.doc_comment = doc_comment,
+        ClassBodyDecl::Interface(i) => i.doc_comment = doc_comment,
+        ClassBodyDecl::Enum(e) => e.doc_comment = doc_comment,
+        ClassBodyDecl::Record(r) => r.doc_comment = doc_comment,
+        ClassBodyDecl::AnnotationType(a) => a.doc_comment = doc_comment,
+        ClassBodyDecl::StaticInit(_) | ClassBodyDecl::InstanceInit(_) | ClassBodyDecl::Empty(_) => {
+            // No doc_comment field to attach to.
+        }
     }
 }
 
@@ -115,6 +247,24 @@ impl Parse for ImportDecl {
     fn parse(input: &ParseStream) -> Result<Self> {
         let import_span = input.peek().span;
         input.expect(TokenKind::Import)?;
+
+        if input.is(&TokenKind::Module) {
+            let saved = input.cursor();
+            let module_span = input.peek().span;
+            input.next();
+            if input.is_any_ident() {
+                let name = parse_path(input)?;
+                input.expect(TokenKind::Semicolon)?;
+                let semi_span = input.peek().span;
+                return Ok(Self::Module {
+                    import_span,
+                    module_span,
+                    name,
+                    semi_span,
+                });
+            }
+            input.set_cursor(saved);
+        }
 
         let is_static = input.eat(&TokenKind::Static);
         let static_span = if is_static {
@@ -184,7 +334,7 @@ impl Parse for ModuleDecl {
             None
         };
         let module_span = input.peek().span;
-        if !input.is_ident("module") {
+        if !input.is(&TokenKind::Module) {
             return Err(crate::error::Error::new(
                 input.peek().span,
                 "expected 'module'",
@@ -219,11 +369,12 @@ fn parse_module_directive(input: &ParseStream) -> Result<ModuleDirective> {
             input.next();
             let requires_span = span;
             let mut modifiers = Vec::new();
-            while input.is(&TokenKind::Transitive) {
-                modifiers.push(RequiresModifier::Transitive(input.next().span));
-            }
-            if input.is(&TokenKind::Static) {
-                modifiers.push(RequiresModifier::Static(input.next().span));
+            while let Some(modifier) = match &input.peek().kind {
+                TokenKind::Transitive => Some(RequiresModifier::Transitive(input.next().span)),
+                TokenKind::Static => Some(RequiresModifier::Static(input.next().span)),
+                _ => None,
+            } {
+                modifiers.push(modifier);
             }
             let module = parse_path(input)?;
             input.expect(TokenKind::Semicolon)?;
@@ -938,12 +1089,14 @@ fn parse_formal_params_after_lparen(input: &ParseStream) -> Result<Vec<FormalPar
             ty
         };
 
+        let trailing_annotations = parse_type_annotations(input);
         if input.eat(&TokenKind::Ellipsis) {
             let ellipsis_span = input.peek().span;
             let name = input.parse_ident().ok();
             params.push(FormalParameter::VarArgs {
                 modifiers,
                 ty,
+                trailing_annotations,
                 ellipsis_span,
                 name,
             });
@@ -1276,9 +1429,9 @@ fn parse_record_decl(
     while !input.is(&TokenKind::RParen) && !input.is_empty() {
         let annotations = parse_annotations(input)?;
         let ty = parse_type(input)?;
-        let name = input.parse_ident()?;
         if input.eat(&TokenKind::Ellipsis) {
             let ellipsis_span = input.peek().span;
+            let name = input.parse_ident()?;
             components.push(RecordComponent::VarArgs {
                 annotations,
                 ty,
@@ -1286,6 +1439,7 @@ fn parse_record_decl(
                 name,
             });
         } else {
+            let name = input.parse_ident()?;
             components.push(RecordComponent::Normal {
                 annotations,
                 ty,
@@ -1521,7 +1675,7 @@ fn parse_constructor_body(input: &ParseStream) -> Result<ConstructorBody> {
     let mut explicit_constructor_call = None;
     let mut stmts = Vec::new();
 
-    if input.is(&TokenKind::This) || input.is(&TokenKind::Super) {
+    {
         let saved = input.cursor();
         let call = input.try_parse(parse_explicit_constructor_call);
         if let Some(call) = call {
@@ -1585,10 +1739,31 @@ fn parse_explicit_constructor_call(input: &ParseStream) -> Result<ExplicitConstr
                 semi_span,
             })
         }
-        _ => Err(crate::error::Error::new(
-            input.peek().span,
-            "expected this or super",
-        )),
+        _ => {
+            // Qualified superclass constructor invocation: `expr.super(args);`
+            let target = parse_postfix_expr_stop_before_super(input)?;
+            let dot_span = input.peek().span;
+            input.expect(TokenKind::Dot)?;
+            let type_args = parse_optional_type_arguments(input);
+            let super_span = input.peek().span;
+            input.expect(TokenKind::Super)?;
+            let open = input.peek().span;
+            input.expect(TokenKind::LParen)?;
+            let args = input.parse_terminated(parse_expression)?;
+            let close = input.peek().span;
+            input.expect(TokenKind::RParen)?;
+            let semi_span = input.peek().span;
+            input.expect(TokenKind::Semicolon)?;
+            Ok(ExplicitConstructorCall::SuperFromExpr {
+                target: Box::new(target),
+                dot_span,
+                type_args,
+                super_span,
+                paren_span: (open, close),
+                args,
+                semi_span,
+            })
+        }
     }
 }
 
@@ -1679,13 +1854,13 @@ fn parse_type(input: &ParseStream) -> Result<Type> {
     };
 
     if input.is(&TokenKind::Void) {
+        let void_span = input.peek().span;
         input.next();
-        return Ok(Type::Void(input.peek().span));
+        return Ok(Type::Void(void_span));
     }
 
     let base = if is_primitive_type_token(&input.peek().kind) {
-        let prim = parse_primitive_type(input)?;
-        Type::Primitive(prim)
+        Type::Primitive(parse_primitive_type(input)?)
     } else if input.is_any_ident() || is_contextual_type_keyword(&input.peek().kind) {
         let path = parse_path(input)?;
         Type::Reference(ReferenceType::ClassOrInterfaceType(ClassOrInterfaceType {
@@ -1885,15 +2060,16 @@ fn is_primitive_type_token(kind: &TokenKind) -> bool {
 }
 
 fn parse_primitive_type(input: &ParseStream) -> Result<PrimitiveType> {
-    let prim = match &input.peek().kind {
-        TokenKind::Byte => PrimitiveType::Byte,
-        TokenKind::Short => PrimitiveType::Short,
-        TokenKind::Int => PrimitiveType::Int,
-        TokenKind::Long => PrimitiveType::Long,
-        TokenKind::Char => PrimitiveType::Char,
-        TokenKind::Float => PrimitiveType::Float,
-        TokenKind::Double => PrimitiveType::Double,
-        TokenKind::Boolean => PrimitiveType::Boolean,
+    let span = input.peek().span;
+    let kind = match &input.peek().kind {
+        TokenKind::Byte => PrimitiveTypeKind::Byte,
+        TokenKind::Short => PrimitiveTypeKind::Short,
+        TokenKind::Int => PrimitiveTypeKind::Int,
+        TokenKind::Long => PrimitiveTypeKind::Long,
+        TokenKind::Char => PrimitiveTypeKind::Char,
+        TokenKind::Float => PrimitiveTypeKind::Float,
+        TokenKind::Double => PrimitiveTypeKind::Double,
+        TokenKind::Boolean => PrimitiveTypeKind::Boolean,
         _ => {
             return Err(crate::error::Error::new(
                 input.peek().span,
@@ -1902,7 +2078,7 @@ fn parse_primitive_type(input: &ParseStream) -> Result<PrimitiveType> {
         }
     };
     input.next();
-    Ok(prim)
+    Ok(PrimitiveType { kind, span })
 }
 fn parse_array_dims(input: &ParseStream) -> Result<Vec<ArrayDim>> {
     let mut dims = Vec::new();
@@ -2044,6 +2220,8 @@ fn parse_type_arguments(input: &ParseStream) -> Result<TypeArguments> {
     let mut gt_spans = Vec::new();
     let mut args = Vec::new();
     loop {
+        let saved = input.cursor();
+        let annotations = parse_type_annotations(input);
         if input.eat(&TokenKind::Question) {
             let wildcard_span = input.peek().span;
             let bound = if input.eat(&TokenKind::Extends) {
@@ -2054,10 +2232,12 @@ fn parse_type_arguments(input: &ParseStream) -> Result<TypeArguments> {
                 None
             };
             args.push(TypeArgument::Wildcard(Wildcard {
+                annotations,
                 bound,
                 span: wildcard_span,
             }));
         } else {
+            input.set_cursor(saved);
             args.push(TypeArgument::Type(Box::new(parse_type(input)?)));
         }
         if input.eat(&TokenKind::Gt) {
@@ -2099,8 +2279,8 @@ fn parse_block(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Bl
         }
         stmts.push(parse_statement(input)?);
     }
-    input.expect(TokenKind::RBrace)?;
     let close = input.peek().span;
+    input.expect(TokenKind::RBrace)?;
     Ok(Block {
         leading_comments,
         brace_span: (open, close),
@@ -3311,6 +3491,7 @@ fn can_start_unary_expr(kind: &TokenKind) -> bool {
             | TokenKind::BoolLit(_)
             | TokenKind::NullLit
             | TokenKind::Ident(_)
+            | TokenKind::Underscore
             | TokenKind::Record
             | TokenKind::Sealed
             | TokenKind::Var
@@ -3325,6 +3506,8 @@ fn can_start_unary_expr(kind: &TokenKind) -> bool {
             | TokenKind::Exports
             | TokenKind::Opens
             | TokenKind::Transitive
+            | TokenKind::Permits
+            | TokenKind::Module
             | TokenKind::Byte
             | TokenKind::Short
             | TokenKind::Int
@@ -3368,9 +3551,52 @@ fn parse_unary_expr(input: &ParseStream) -> Result<Expr> {
 }
 
 fn parse_postfix_expr(input: &ParseStream) -> Result<Expr> {
+    parse_postfix_expr_impl(input, false)
+}
+
+/// Parse a postfix expression, optionally stopping before a trailing
+/// `. [TypeArguments] super (` so the caller can treat it as a qualified
+/// superclass constructor invocation (`expr.super(args);`, JLS §8.8.7.1).
+fn parse_postfix_expr_stop_before_super(input: &ParseStream) -> Result<Expr> {
+    parse_postfix_expr_impl(input, true)
+}
+
+/// Checks whether the upcoming tokens are `. [TypeArguments] super (`,
+/// without consuming anything.
+fn peek_dot_super_call(input: &ParseStream) -> bool {
+    if !input.is(&TokenKind::Dot) {
+        return false;
+    }
+    let state = input.save_state();
+    input.next(); // consume '.'
+    let _ = parse_optional_type_arguments(input);
+    let matched =
+        input.is(&TokenKind::Super) && matches!(input.look_ahead(1).kind, TokenKind::LParen);
+    input.restore_state(state);
+    matched
+}
+
+fn parse_postfix_expr_impl(input: &ParseStream, stop_before_super_call: bool) -> Result<Expr> {
+    if is_any_ident_kind(&input.peek().kind) || is_primitive_type_token(&input.peek().kind) {
+        let saved = input.save_state();
+        if let Ok(ty) = parse_type(input)
+            && input.is(&TokenKind::ColonColon)
+        {
+            if let Type::Reference(ReferenceType::Array(_)) = &ty {
+                return Ok(Expr::MethodRef(parse_array_method_ref_tail(input, ty)?));
+            } else if let Type::Reference(ReferenceType::ClassOrInterfaceType(c)) = ty {
+                return Ok(Expr::MethodRef(parse_method_ref_tail(input, c.path)?));
+            }
+        }
+        input.restore_state(saved);
+    }
+
     let mut expr = parse_primary_expr(input)?;
 
     loop {
+        if stop_before_super_call && peek_dot_super_call(input) {
+            break;
+        }
         match &input.peek().kind {
             TokenKind::Dot => {
                 let dot_span = input.peek().span;
@@ -3555,12 +3781,15 @@ fn parse_postfix_expr(input: &ParseStream) -> Result<Expr> {
                             class_span,
                         };
                     } else if input.is(&TokenKind::ColonColon) {
-                        // Method reference with array type: e.g., `ComponentName[]::new`
-                        // Skip the `[]` — the `::` handler below will handle the rest
-                        // The expression remains as the base identifier, which will be
-                        // converted to a path by the `::` handler. Not perfect for array
-                        // types but better than failing.
-                        // Leave expr as-is (the base identifier)
+                        // Array-type method reference (e.g. `ComponentName[]::new`) is
+                        // handled up front in parse_postfix_expr_impl via parse_type, since
+                        // the target must be a syntactic ArrayType, not an arbitrary
+                        // expression with trailing `[]`. Reaching here means `expr` isn't
+                        // a valid ArrayType element type.
+                        return Err(crate::error::Error::new(
+                            open,
+                            "array type method reference target must be a type",
+                        ));
                     } else {
                         // Standalone empty `[]` — probably a syntax error in context,
                         // but recover gracefully by treating as array type expression
@@ -3644,14 +3873,38 @@ fn parse_postfix_expr(input: &ParseStream) -> Result<Expr> {
 fn expr_to_type(expr: &Expr) -> Result<Type> {
     match expr {
         Expr::Ident(i) => match i.name.as_str() {
-            "byte" => Ok(Type::Primitive(PrimitiveType::Byte)),
-            "short" => Ok(Type::Primitive(PrimitiveType::Short)),
-            "int" => Ok(Type::Primitive(PrimitiveType::Int)),
-            "long" => Ok(Type::Primitive(PrimitiveType::Long)),
-            "char" => Ok(Type::Primitive(PrimitiveType::Char)),
-            "float" => Ok(Type::Primitive(PrimitiveType::Float)),
-            "double" => Ok(Type::Primitive(PrimitiveType::Double)),
-            "boolean" => Ok(Type::Primitive(PrimitiveType::Boolean)),
+            "byte" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Byte,
+                span: i.span(),
+            })),
+            "short" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Short,
+                span: i.span(),
+            })),
+            "int" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Int,
+                span: i.span(),
+            })),
+            "long" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Long,
+                span: i.span(),
+            })),
+            "char" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Char,
+                span: i.span(),
+            })),
+            "float" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Float,
+                span: i.span(),
+            })),
+            "double" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Double,
+                span: i.span(),
+            })),
+            "boolean" => Ok(Type::Primitive(PrimitiveType {
+                kind: PrimitiveTypeKind::Boolean,
+                span: i.span(),
+            })),
             "void" => Ok(Type::Void(i.span())),
             _ => Ok(Type::Reference(ReferenceType::ClassOrInterfaceType(
                 ClassOrInterfaceType {
@@ -3671,6 +3924,52 @@ fn expr_to_type(expr: &Expr) -> Result<Type> {
         }
         _ => Err(crate::error::Error::new(expr.span(), "expected type")),
     }
+}
+
+fn parse_method_ref_tail(input: &ParseStream, path: Path) -> Result<MethodRefExpr> {
+    let colon_colon_span = input.peek().span;
+    input.expect(TokenKind::ColonColon)?;
+    let type_args = parse_optional_type_arguments(input);
+    let method_name = if input.is(&TokenKind::New) {
+        let name = Ident::new("new".to_string(), input.peek().span);
+        input.next();
+        name
+    } else {
+        input.parse_ident()?
+    };
+    Ok(MethodRefExpr {
+        target: MethodRefTarget::Type(path),
+        colon_colon_span,
+        type_args,
+        method_name,
+    })
+}
+
+/// Parse the `::` tail of an array-type method reference. Per JLS §15.13, an array
+/// type target supports both `ArrayType :: new` (array creation; no `[TypeArguments]`
+/// allowed) and the ordinary `ReferenceType :: [TypeArguments] Identifier` form, e.g.
+/// `int[]::new` and `int[]::clone`.
+fn parse_array_method_ref_tail(input: &ParseStream, ty: Type) -> Result<MethodRefExpr> {
+    let colon_colon_span = input.peek().span;
+    input.expect(TokenKind::ColonColon)?;
+    if input.is(&TokenKind::New) {
+        let method_name_span = input.peek().span;
+        input.next();
+        return Ok(MethodRefExpr {
+            target: MethodRefTarget::ArrayType(ty),
+            colon_colon_span,
+            type_args: None,
+            method_name: Ident::new("new".to_string(), method_name_span),
+        });
+    }
+    let type_args = parse_optional_type_arguments(input);
+    let method_name = input.parse_ident()?;
+    Ok(MethodRefExpr {
+        target: MethodRefTarget::ArrayType(ty),
+        colon_colon_span,
+        type_args,
+        method_name,
+    })
 }
 
 fn expr_to_path(expr: Expr) -> Result<Path> {
@@ -3720,26 +4019,6 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
                 if can_be_cast {
                     input.next();
                     let close = input.peek().span;
-                    // Could be cast or lambda with typed params
-                    // If next is '->', it's a lambda
-                    if input.is(&TokenKind::Arrow) {
-                        let arrow_span = input.peek().span;
-                        input.next();
-                        let body = parse_lambda_body(input)?;
-                        return Ok(Expr::Lambda(LambdaExpr {
-                            params: LambdaParams::List {
-                                paren_span: (open, close),
-                                params: vec![LambdaParam {
-                                    modifiers: vec![],
-                                    ty,
-                                    name: crate::ident::Ident::new("_".to_string(), span),
-                                }],
-                            },
-                            arrow_span,
-                            body,
-                            span: open.join(input.peek().span),
-                        }));
-                    }
                     let expr = parse_unary_expr(input)?;
                     // For intersection types, we create a special cast expression
                     // For now, we just use the first type (could be enhanced later)
@@ -3758,7 +4037,6 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
         // Cursor is at ')' (the first token after the consumed '(').
         // Scan forward: look_ahead(0) is ')', which matches our '('.
         {
-            let lambda_saved = input.cursor();
             let mut depth = 1;
             let mut offset = 0;
             loop {
@@ -3781,18 +4059,9 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
             if input.look_ahead(offset + 1).kind == TokenKind::Arrow {
                 // Parse lambda params (cursor is after '('; parse_lambda_params_after_lparen
                 // handles parsing until ')')
-                let params = parse_lambda_params_after_lparen(input)?;
-                let arrow_span = input.peek().span;
-                input.next();
-                let body = parse_lambda_body(input)?;
-                return Ok(Expr::Lambda(LambdaExpr {
-                    params,
-                    arrow_span,
-                    body,
-                    span: open.join(input.peek().span),
-                }));
+                let params = parse_lambda_params_after_lparen(input, open)?;
+                return parse_lambda(input, params, open);
             }
-            input.set_cursor(lambda_saved);
         }
 
         // Parenthesized expression
@@ -3854,6 +4123,12 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
         TokenKind::New => parse_new_expr(input),
         TokenKind::Switch => parse_switch_expr(input),
         TokenKind::LBrace => Ok(Expr::ArrayInit(parse_array_init(input)?)),
+        TokenKind::Underscore if input.look_ahead(1).kind == TokenKind::Arrow => {
+            // Single unnamed lambda parameter: `_ -> expr` (JLS §15.27.1)
+            let name = parse_lambda_param_name(input)?;
+            let start = name.span();
+            parse_lambda(input, LambdaParams::Single(name), start)
+        }
         _ => {
             // Check for identifier (possibly with method reference)
             // Also allow primitive type keywords and void as identifiers for .class expressions
@@ -3865,17 +4140,12 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
                 let ident = input.parse_ident()?;
                 // Check for single-param lambda: `x -> expr`
                 if input.is(&TokenKind::Arrow) {
-                    let ident_span = ident.span;
-                    let arrow_span = input.peek().span;
-                    input.next();
-                    let body = parse_lambda_body(input)?;
-                    let end = body.span();
-                    return Ok(Expr::Lambda(LambdaExpr {
-                        params: LambdaParams::Single(ident),
-                        arrow_span,
-                        body,
-                        span: ident_span.join(end),
-                    }));
+                    let start = ident.span();
+                    return parse_lambda(
+                        input,
+                        LambdaParams::Single(LambdaParamName::Named(ident)),
+                        start,
+                    );
                 }
                 // Check for type arguments followed by :: (method reference with type args)
                 // e.g., Collection<T>::add, Class<?>[]::new
@@ -3926,56 +4196,66 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
     }
 }
 
-fn parse_lambda_params_after_lparen(input: &ParseStream) -> Result<LambdaParams> {
-    let open = input.peek().span;
+fn parse_lambda_param_name(input: &ParseStream) -> Result<LambdaParamName> {
+    if input.is(&TokenKind::Underscore) {
+        let span = input.next().span;
+        Ok(LambdaParamName::Unnamed(span))
+    } else {
+        input.parse_ident().map(LambdaParamName::Named)
+    }
+}
+
+fn parse_lambda(input: &ParseStream, params: LambdaParams, start: Span) -> Result<Expr> {
+    let arrow_span = input.peek().span;
+    input.expect(TokenKind::Arrow)?;
+    let body = parse_lambda_body(input)?;
+    let end = body.span();
+    Ok(Expr::Lambda(LambdaExpr {
+        params,
+        arrow_span,
+        body,
+        span: start.join(end),
+    }))
+}
+
+fn parse_lambda_params_after_lparen(input: &ParseStream, open: Span) -> Result<LambdaParams> {
     let mut params = Vec::new();
     let mut idents = Vec::new();
 
     while !input.is(&TokenKind::RParen) && !input.is_empty() {
         let saved = input.cursor();
         // Try to parse as typed parameter: Type name
-        if let Ok(ty) = parse_type(input) {
-            if input.is_any_ident() {
-                let name = input.parse_ident()?;
-                params.push(LambdaParam {
-                    modifiers: vec![],
-                    ty,
-                    name,
-                });
-                if !input.eat(&TokenKind::Comma) {
-                    break;
-                }
-                continue;
-            }
-            input.set_cursor(saved);
+        let typed = parse_type(input)
+            .ok()
+            .filter(|_| input.is_any_ident() || input.is(&TokenKind::Underscore));
+        if let Some(ty) = typed {
+            let name = parse_lambda_param_name(input)?;
+            params.push(LambdaParam {
+                modifiers: vec![],
+                ty,
+                name,
+            });
         } else {
             input.set_cursor(saved);
+            idents.push(parse_lambda_param_name(input)?);
         }
-        // Parse as inferred parameter: just an ident
-        let ident = input.parse_ident()?;
-        idents.push(ident);
         if !input.eat(&TokenKind::Comma) {
             break;
         }
     }
 
-    input.expect(TokenKind::RParen)?;
     let close = input.peek().span;
+    input.expect(TokenKind::RParen)?;
 
-    if !params.is_empty() && idents.is_empty() {
+    if !params.is_empty() && !idents.is_empty() {
+        Err(crate::error::Error::new(
+            open.join(close),
+            "cannot mix typed and inferred lambda parameters",
+        ))
+    } else if !params.is_empty() {
         Ok(LambdaParams::List {
             paren_span: (open, close),
             params,
-        })
-    } else if params.is_empty() && !idents.is_empty() {
-        Ok(LambdaParams::IdentList {
-            paren_span: (open, close),
-            idents,
-        })
-    } else if params.is_empty() && idents.is_empty() {
-        Ok(LambdaParams::IdentList {
-            paren_span: (open, close),
-            idents: vec![],
         })
     } else {
         Ok(LambdaParams::IdentList {
@@ -4001,8 +4281,7 @@ fn parse_new_expr(input: &ParseStream) -> Result<Expr> {
     // Parse the element/base type WITHOUT consuming array dimensions
     let annotations = parse_type_annotations(input);
     let base_type = if is_primitive_type_token(&input.peek().kind) {
-        let prim = parse_primitive_type(input)?;
-        Type::Primitive(prim)
+        Type::Primitive(parse_primitive_type(input)?)
     } else if input.is_any_ident() || is_contextual_type_keyword(&input.peek().kind) {
         let path = parse_path(input)?;
         Type::Reference(ReferenceType::ClassOrInterfaceType(ClassOrInterfaceType {

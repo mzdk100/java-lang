@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::{ident::Ident, span::Span};
 
-use super::ty::Type;
+use super::{attribute::Annotation, ty::Type};
 
 /// A qualified path like `java.util.List` or just `List`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -111,6 +111,7 @@ pub enum TypeArgument {
 /// A wildcard type argument: `? extends T` or `? super T`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Wildcard {
+    pub annotations: Vec<Annotation>,
     pub bound: Option<WildcardBound>,
     pub span: Span,
 }

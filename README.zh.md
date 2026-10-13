@@ -42,10 +42,10 @@ let unit: CompilationUnit = parse_str(
     "package com.example;\n\npublic class Hello {\n    public static void main(String[] args) {\n        System.out.println(\"Hello, World!\");\n    }\n}\n"
 ).unwrap();
 
-if let Some(pkg) = &unit.package {
+if let Some(pkg) = unit.package() {
     println!("Package: {:?}", pkg.name);
 }
-for item in &unit.type_decls {
+for item in unit.type_decls() {
     println!("Type: {:?}", item);
 }
 ```
@@ -69,7 +69,7 @@ let unit: CompilationUnit = parse_str(r#"
 "#).unwrap();
 
 // 类上的文档注释
-if let Some(cls) = unit.type_decls.first() {
+if let Some(cls) = unit.type_decls().first() {
     // 通过 TypeDecl::Class(cls) 匹配访问 doc_comment
 }
 
@@ -86,7 +86,7 @@ for comment in &unit.comments {
 ```rust
 use java_lang::ast::{TypeDecl, ClassBodyDecl};
 
-for type_decl in &unit.type_decls {
+for type_decl in unit.type_decls() {
     match type_decl {
         TypeDecl::Class(cls) => {
             println!("Class: {}", cls.name);
