@@ -11,7 +11,7 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     /// A primitive type: `int`, `boolean`, etc.
-    Primitive(PrimitiveType),
+    Primitive(PrimitiveType, Span),
     /// A reference type: class, interface, type variable, or array.
     Reference(ReferenceType),
     /// The `void` type (only used in method return types).
@@ -21,7 +21,7 @@ pub enum Type {
 impl Type {
     pub fn span(&self) -> Span {
         match self {
-            Self::Primitive(p) => p.span(),
+            Self::Primitive(_, s) => *s,
             Self::Reference(r) => r.span(),
             Self::Void(s) => *s,
         }
@@ -34,7 +34,7 @@ impl Type {
 
     /// Check if this is a primitive type.
     pub fn is_primitive(&self) -> bool {
-        matches!(self, Self::Primitive(_))
+        matches!(self, Self::Primitive(_, _))
     }
 }
 

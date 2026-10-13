@@ -18,7 +18,14 @@ impl Parse for CompilationUnit {
         let mut package = None;
         let mut imports = Vec::new();
         let mut module = None;
-        let mut type_decls = Vec::new();
+        // Top-level class/interface/enum/record/annotation-type declarations seen so
+        // far. Kept separate from `implicit_members` until we know whether this is an
+        // OrdinaryCompilationUnit or a CompactCompilationUnit (JLS §7.3): a compact
+        // unit's members include any such declarations seen anywhere in the file, not
+        // just the ones after the first field/method.
+        let mut type_decls: Vec<TypeDecl> = Vec::new();
+        let mut implicit_members: Vec<ClassBodyDecl> = Vec::new();
+        let mut is_compact_unit = false;
 
         while !input.is_empty() {
             if input.is(&TokenKind::Semicolon) {
@@ -26,7 +33,11 @@ impl Parse for CompilationUnit {
                 input.collect_pending_comments();
                 let sp = input.peek().span;
                 input.next();
-                type_decls.push(TypeDecl::Empty(sp));
+                if is_compact_unit {
+                    implicit_members.push(ClassBodyDecl::Empty(sp));
+                } else {
+                    type_decls.push(TypeDecl::Empty(sp));
+                }
                 continue;
             }
             if input.is(&TokenKind::At) || input.is(&TokenKind::Package) {
@@ -45,7 +56,10 @@ impl Parse for CompilationUnit {
             }
             // Collect doc comments before the declaration
             let doc_comment = input.collect_pending_doc_comments();
-            if input.is(&TokenKind::At) || input.is(&TokenKind::Module) || input.is(&TokenKind::Open) {
+            if input.is(&TokenKind::At)
+                || input.is(&TokenKind::Module)
+                || input.is(&TokenKind::Open)
+            {
                 let saved = input.cursor();
                 if let Some(mut mod_decl) = input.try_parse(ModuleDecl::parse) {
                     mod_decl.doc_comment = doc_comment;
@@ -54,14 +68,68 @@ impl Parse for CompilationUnit {
                 }
                 input.set_cursor(saved);
             }
-            // Type declaration
-            let mut type_decl: TypeDecl = input.parse()?;
-            set_type_decl_doc_comment(&mut type_decl, doc_comment);
-            type_decls.push(type_decl);
+            if !is_compact_unit {
+                // Try an ordinary top-level type declaration first.
+                let saved = input.cursor();
+                if let Some(mut type_decl) = input.try_parse(TypeDecl::parse) {
+                    set_type_decl_doc_comment(&mut type_decl, doc_comment);
+                    type_decls.push(type_decl);
+                    continue;
+                }
+                input.set_cursor(saved);
+            }
+            // Compact compilation unit (JLS §7.3, §8.1.8): a top-level method, field,
+            // or nested type with no enclosing class declaration. Constructors and
+            // initializer blocks can never appear at the top level.
+            let mut member = parse_class_body_decl(input)?;
+            if let ClassBodyDecl::Constructor(_)
+            | ClassBodyDecl::StaticInit(_)
+            | ClassBodyDecl::InstanceInit(_) = &member
+            {
+                return Err(crate::error::Error::new(
+                    member.span(),
+                    "constructors and initializer blocks cannot appear at the top level",
+                ));
+            }
+            set_class_body_decl_doc_comment(&mut member, doc_comment);
+            if !is_compact_unit {
+                // First member not expressible as a top-level type declaration: this
+                // is a compact compilation unit. Every type declaration collected so
+                // far becomes a member of the implicit class too (JLS §7.3).
+                is_compact_unit = true;
+                implicit_members.extend(type_decls.drain(..).map(type_decl_to_class_body_decl));
+            }
+            implicit_members.push(member);
         }
 
         // Collect any remaining comments at the end of the file
         let comments = input.collect_pending_comments();
+
+        let implicit_class = if is_compact_unit {
+            if let Some(pkg) = &package {
+                return Err(crate::error::Error::new(
+                    pkg.span,
+                    "a compact compilation unit cannot have a package declaration",
+                ));
+            }
+            if !implicit_members
+                .iter()
+                .any(|m| matches!(m, ClassBodyDecl::Method(_)))
+            {
+                let span = implicit_members
+                    .last()
+                    .map_or_else(Span::call_site, |m| m.span());
+                return Err(crate::error::Error::new(
+                    span,
+                    "a compact compilation unit must declare at least one method",
+                ));
+            }
+            Some(ImplicitClassDecl {
+                members: implicit_members,
+            })
+        } else {
+            None
+        };
 
         Ok(Self {
             comments,
@@ -69,7 +137,19 @@ impl Parse for CompilationUnit {
             imports,
             type_decls,
             module,
+            implicit_class,
         })
+    }
+}
+
+fn type_decl_to_class_body_decl(decl: TypeDecl) -> ClassBodyDecl {
+    match decl {
+        TypeDecl::Class(c) => ClassBodyDecl::Class(c),
+        TypeDecl::Interface(i) => ClassBodyDecl::Interface(i),
+        TypeDecl::Enum(e) => ClassBodyDecl::Enum(e),
+        TypeDecl::Record(r) => ClassBodyDecl::Record(r),
+        TypeDecl::AnnotationType(a) => ClassBodyDecl::AnnotationType(a),
+        TypeDecl::Empty(s) => ClassBodyDecl::Empty(s),
     }
 }
 
@@ -81,6 +161,22 @@ fn set_type_decl_doc_comment(decl: &mut TypeDecl, doc_comment: Vec<Comment>) {
         TypeDecl::Record(r) => r.doc_comment = doc_comment,
         TypeDecl::AnnotationType(a) => a.doc_comment = doc_comment,
         TypeDecl::Empty(_) => {}
+    }
+}
+
+fn set_class_body_decl_doc_comment(decl: &mut ClassBodyDecl, doc_comment: Vec<Comment>) {
+    match decl {
+        ClassBodyDecl::Field(f) => f.doc_comment = doc_comment,
+        ClassBodyDecl::Method(m) => m.doc_comment = doc_comment,
+        ClassBodyDecl::Constructor(c) => c.doc_comment = doc_comment,
+        ClassBodyDecl::Class(c) => c.doc_comment = doc_comment,
+        ClassBodyDecl::Interface(i) => i.doc_comment = doc_comment,
+        ClassBodyDecl::Enum(e) => e.doc_comment = doc_comment,
+        ClassBodyDecl::Record(r) => r.doc_comment = doc_comment,
+        ClassBodyDecl::AnnotationType(a) => a.doc_comment = doc_comment,
+        ClassBodyDecl::StaticInit(_) | ClassBodyDecl::InstanceInit(_) | ClassBodyDecl::Empty(_) => {
+            // No doc_comment field to attach to.
+        }
     }
 }
 
@@ -1725,13 +1821,14 @@ fn parse_type(input: &ParseStream) -> Result<Type> {
     };
 
     if input.is(&TokenKind::Void) {
+        let void_span = input.peek().span;
         input.next();
-        return Ok(Type::Void(input.peek().span));
+        return Ok(Type::Void(void_span));
     }
 
     let base = if is_primitive_type_token(&input.peek().kind) {
-        let prim = parse_primitive_type(input)?;
-        Type::Primitive(prim)
+        let (prim, prim_span) = parse_primitive_type(input)?;
+        Type::Primitive(prim, prim_span)
     } else if input.is_any_ident() || is_contextual_type_keyword(&input.peek().kind) {
         let path = parse_path(input)?;
         Type::Reference(ReferenceType::ClassOrInterfaceType(ClassOrInterfaceType {
@@ -1930,7 +2027,8 @@ fn is_primitive_type_token(kind: &TokenKind) -> bool {
     )
 }
 
-fn parse_primitive_type(input: &ParseStream) -> Result<PrimitiveType> {
+fn parse_primitive_type(input: &ParseStream) -> Result<(PrimitiveType, Span)> {
+    let span = input.peek().span;
     let prim = match &input.peek().kind {
         TokenKind::Byte => PrimitiveType::Byte,
         TokenKind::Short => PrimitiveType::Short,
@@ -1948,7 +2046,7 @@ fn parse_primitive_type(input: &ParseStream) -> Result<PrimitiveType> {
         }
     };
     input.next();
-    Ok(prim)
+    Ok((prim, span))
 }
 fn parse_array_dims(input: &ParseStream) -> Result<Vec<ArrayDim>> {
     let mut dims = Vec::new();
@@ -3743,14 +3841,14 @@ fn parse_postfix_expr_impl(input: &ParseStream, stop_before_super_call: bool) ->
 fn expr_to_type(expr: &Expr) -> Result<Type> {
     match expr {
         Expr::Ident(i) => match i.name.as_str() {
-            "byte" => Ok(Type::Primitive(PrimitiveType::Byte)),
-            "short" => Ok(Type::Primitive(PrimitiveType::Short)),
-            "int" => Ok(Type::Primitive(PrimitiveType::Int)),
-            "long" => Ok(Type::Primitive(PrimitiveType::Long)),
-            "char" => Ok(Type::Primitive(PrimitiveType::Char)),
-            "float" => Ok(Type::Primitive(PrimitiveType::Float)),
-            "double" => Ok(Type::Primitive(PrimitiveType::Double)),
-            "boolean" => Ok(Type::Primitive(PrimitiveType::Boolean)),
+            "byte" => Ok(Type::Primitive(PrimitiveType::Byte, i.span())),
+            "short" => Ok(Type::Primitive(PrimitiveType::Short, i.span())),
+            "int" => Ok(Type::Primitive(PrimitiveType::Int, i.span())),
+            "long" => Ok(Type::Primitive(PrimitiveType::Long, i.span())),
+            "char" => Ok(Type::Primitive(PrimitiveType::Char, i.span())),
+            "float" => Ok(Type::Primitive(PrimitiveType::Float, i.span())),
+            "double" => Ok(Type::Primitive(PrimitiveType::Double, i.span())),
+            "boolean" => Ok(Type::Primitive(PrimitiveType::Boolean, i.span())),
             "void" => Ok(Type::Void(i.span())),
             _ => Ok(Type::Reference(ReferenceType::ClassOrInterfaceType(
                 ClassOrInterfaceType {
@@ -4127,8 +4225,8 @@ fn parse_new_expr(input: &ParseStream) -> Result<Expr> {
     // Parse the element/base type WITHOUT consuming array dimensions
     let annotations = parse_type_annotations(input);
     let base_type = if is_primitive_type_token(&input.peek().kind) {
-        let prim = parse_primitive_type(input)?;
-        Type::Primitive(prim)
+        let (prim, prim_span) = parse_primitive_type(input)?;
+        Type::Primitive(prim, prim_span)
     } else if input.is_any_ident() || is_contextual_type_keyword(&input.peek().kind) {
         let path = parse_path(input)?;
         Type::Reference(ReferenceType::ClassOrInterfaceType(ClassOrInterfaceType {

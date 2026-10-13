@@ -6,6 +6,7 @@
 
 use java_lang::{CompilationUnit, parse_str};
 
+#[allow(dead_code)]
 fn rejects(source: &str) {
     let error = parse_str::<CompilationUnit>(source)
         .expect_err("reported bug did not reproduce: Java example parsed successfully");
@@ -148,7 +149,7 @@ class Foo {
 /// Source: <https://github.com/junit-team/junit5/blob/1ef55a6a9a2430ae274165bfcc4251d5e147b803/platform-tooling-support-tests/projects/junit-start/compact/JUnitRunClass.java#L13>.
 #[test]
 fn bug_08_implicit_class() {
-    rejects(
+    accepts(
         r#"void main() {
     System.out.println("hi");
 }

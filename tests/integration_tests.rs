@@ -6,6 +6,57 @@ fn test_empty_compilation_unit() {
     assert!(cu.package.is_none());
     assert!(cu.imports.is_empty());
     assert!(cu.type_decls.is_empty());
+    assert!(cu.implicit_class.is_none());
+}
+
+#[test]
+fn test_implicit_class_compact_compilation_unit() {
+    let cu: CompilationUnit = parse_str("void main() { System.out.println(\"hi\"); }").unwrap();
+    assert!(cu.type_decls.is_empty());
+    let members = cu.implicit_class.unwrap().members;
+    assert_eq!(members.len(), 1);
+    assert!(matches!(members[0], ClassBodyDecl::Method(_)));
+}
+
+#[test]
+fn test_implicit_class_mixed_members() {
+    let cu: CompilationUnit = parse_str("int x; void main() {} class Nested {}").unwrap();
+    let members = cu.implicit_class.unwrap().members;
+    assert!(matches!(members[0], ClassBodyDecl::Field(_)));
+    assert!(matches!(members[1], ClassBodyDecl::Method(_)));
+    assert!(matches!(members[2], ClassBodyDecl::Class(_)));
+}
+
+#[test]
+fn test_implicit_class_reclassifies_leading_type_decl() {
+    // A class seen before the member that reveals this is a compact unit must
+    // become an implicit-class member too, not stay in type_decls.
+    let cu: CompilationUnit = parse_str("class Helper {} void main() {}").unwrap();
+    let members = cu.implicit_class.unwrap().members;
+    assert!(matches!(members[0], ClassBodyDecl::Class(_)));
+    assert!(matches!(members[1], ClassBodyDecl::Method(_)));
+}
+
+#[test]
+fn test_ordinary_compilation_unit_has_no_implicit_class() {
+    let cu: CompilationUnit = parse_str("class Foo {}").unwrap();
+    assert!(cu.implicit_class.is_none());
+    assert_eq!(cu.type_decls.len(), 1);
+}
+
+#[test]
+fn test_implicit_class_requires_a_method() {
+    parse_str::<CompilationUnit>("int x;").unwrap_err();
+}
+
+#[test]
+fn test_implicit_class_rejects_package_declaration() {
+    parse_str::<CompilationUnit>("package p; void main() {}").unwrap_err();
+}
+
+#[test]
+fn test_implicit_class_rejects_constructor() {
+    parse_str::<CompilationUnit>("Foo() {} void main() {}").unwrap_err();
 }
 
 #[test]
