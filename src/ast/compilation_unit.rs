@@ -5,58 +5,81 @@ use crate::{ast::path::Path, ident::Ident, span::Span};
 use super::{
     Comment,
     attribute::Annotation,
-    item::{ClassBodyDecl, TypeDecl},
+    item::{ClassBodyDecl, ModuleDecl, TypeDecl},
 };
 
 /// A Java compilation unit (a single source file).
+///
+/// Per JLS §7.3, a compilation unit is exactly one of an ordinary, modular,
+/// or compact compilation unit; `kind` encodes which.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CompilationUnit {
-    /// The package declaration, if present.
-    pub package: Option<PackageDecl>,
     /// Import declarations.
     pub imports: Vec<ImportDecl>,
-    /// Top-level type declarations.
-    pub type_decls: Vec<TypeDecl>,
-    /// The module declaration, if present (for module-info.java).
-    pub module: Option<super::item::ModuleDecl>,
-    /// The implicitly declared class, if this is a compact compilation unit
-    pub implicit_class: Option<ImplicitClassDecl>,
+    /// The ordinary/modular/compact body of the compilation unit.
+    pub kind: CompilationUnitKind,
     /// All comments in the source file.
     pub comments: Vec<Comment>,
 }
 
+/// The three mutually exclusive forms of compilation unit (JLS §7.3).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CompilationUnitKind {
+    /// An `OrdinaryCompilationUnit`: an optional package declaration followed
+    /// by top-level type declarations.
+    Ordinary {
+        package: Option<PackageDecl>,
+        type_decls: Vec<TypeDecl>,
+    },
+    /// A `ModularCompilationUnit` (`module-info.java`).
+    Modular(ModuleDecl),
+    /// A `CompactCompilationUnit` (JLS §8.1.8): top-level methods/fields/nested
+    /// types with no enclosing `class` declaration.
+    Compact(ImplicitClassDecl),
+}
+
 impl CompilationUnit {
+    /// The package declaration, if this is an ordinary compilation unit that has one.
+    pub fn package(&self) -> Option<&PackageDecl> {
+        match &self.kind {
+            CompilationUnitKind::Ordinary { package, .. } => package.as_ref(),
+            CompilationUnitKind::Modular(_) | CompilationUnitKind::Compact(_) => None,
+        }
+    }
+
+    /// The top-level type declarations, if this is an ordinary compilation unit.
+    /// Empty for modular and compact compilation units.
+    pub fn type_decls(&self) -> &[TypeDecl] {
+        match &self.kind {
+            CompilationUnitKind::Ordinary { type_decls, .. } => type_decls,
+            CompilationUnitKind::Modular(_) | CompilationUnitKind::Compact(_) => &[],
+        }
+    }
+
     /// Get the span of the entire compilation unit.
     pub fn span(&self) -> Span {
-        let start = match &self.package {
-            Some(pkg) => pkg.span,
-            None => match self.imports.first() {
-                Some(imp) => imp.span(),
-                None => match self.type_decls.first() {
-                    Some(decl) => decl.span(),
-                    None => match &self.module {
-                        Some(m) => m.span(),
-                        None => match &self.implicit_class {
-                            Some(c) => c.span(),
-                            None => Span::call_site(),
-                        },
-                    },
-                },
-            },
+        let kind_span = match &self.kind {
+            CompilationUnitKind::Modular(m) => Some(m.span()),
+            CompilationUnitKind::Compact(c) => Some(c.span()),
+            CompilationUnitKind::Ordinary { .. } => None,
         };
-        let end = match self.type_decls.last() {
-            Some(decl) => decl.span(),
-            None => match self.module {
-                Some(ref m) => m.span(),
-                None => match &self.implicit_class {
-                    Some(c) => c.span(),
-                    None => match self.imports.last() {
-                        Some(imp) => imp.span(),
-                        None => start,
-                    },
-                },
-            },
-        };
+
+        let start = self
+            .package()
+            .map(|pkg| pkg.span)
+            .or_else(|| self.imports.first().map(ImportDecl::span))
+            .or_else(|| self.type_decls().first().map(TypeDecl::span))
+            .or(kind_span)
+            .unwrap_or_else(Span::call_site);
+
+        let end = self
+            .type_decls()
+            .last()
+            .map(TypeDecl::span)
+            .or(kind_span)
+            .or_else(|| self.imports.last().map(ImportDecl::span))
+            .unwrap_or(start);
+
         start.join(end)
     }
 }

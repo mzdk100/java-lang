@@ -15,10 +15,10 @@
 //! ).unwrap();
 //!
 //! // Access parsed elements
-//! if let Some(pkg) = &unit.package {
+//! if let Some(pkg) = unit.package() {
 //!     println!("Package: {:?}", pkg.name);
 //! }
-//! for item in &unit.type_decls {
+//! for item in unit.type_decls() {
 //!     println!("Type: {:?}", item);
 //! }
 //! ```

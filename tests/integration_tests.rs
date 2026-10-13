@@ -1,19 +1,48 @@
 use java_lang::{CommentKind, ast::*, parse_str};
 
+fn type_decls(cu: &CompilationUnit) -> &[TypeDecl] {
+    assert!(
+        matches!(cu.kind, CompilationUnitKind::Ordinary { .. }),
+        "expected an ordinary compilation unit"
+    );
+    cu.type_decls()
+}
+
+fn package(cu: &CompilationUnit) -> Option<&PackageDecl> {
+    assert!(
+        matches!(cu.kind, CompilationUnitKind::Ordinary { .. }),
+        "expected an ordinary compilation unit"
+    );
+    cu.package()
+}
+
+fn module(cu: &CompilationUnit) -> Option<&ModuleDecl> {
+    match &cu.kind {
+        CompilationUnitKind::Modular(m) => Some(m),
+        _ => None,
+    }
+}
+
+fn implicit_class(cu: &CompilationUnit) -> Option<&ImplicitClassDecl> {
+    match &cu.kind {
+        CompilationUnitKind::Compact(c) => Some(c),
+        _ => None,
+    }
+}
+
 #[test]
 fn test_empty_compilation_unit() {
     let cu: CompilationUnit = parse_str("").unwrap();
-    assert!(cu.package.is_none());
+    assert!(package(&cu).is_none());
     assert!(cu.imports.is_empty());
-    assert!(cu.type_decls.is_empty());
-    assert!(cu.implicit_class.is_none());
+    assert!(type_decls(&cu).is_empty());
+    assert!(implicit_class(&cu).is_none());
 }
 
 #[test]
 fn test_implicit_class_compact_compilation_unit() {
     let cu: CompilationUnit = parse_str("void main() { System.out.println(\"hi\"); }").unwrap();
-    assert!(cu.type_decls.is_empty());
-    let members = cu.implicit_class.unwrap().members;
+    let members = implicit_class(&cu).unwrap().members.clone();
     assert_eq!(members.len(), 1);
     assert!(matches!(members[0], ClassBodyDecl::Method(_)));
 }
@@ -35,7 +64,7 @@ fn test_implicit_class_span_includes_leading_field() {
 #[test]
 fn test_implicit_class_mixed_members() {
     let cu: CompilationUnit = parse_str("int x; void main() {} class Nested {}").unwrap();
-    let members = cu.implicit_class.unwrap().members;
+    let members = implicit_class(&cu).unwrap().members.clone();
     assert!(matches!(members[0], ClassBodyDecl::Field(_)));
     assert!(matches!(members[1], ClassBodyDecl::Method(_)));
     assert!(matches!(members[2], ClassBodyDecl::Class(_)));
@@ -46,7 +75,7 @@ fn test_implicit_class_reclassifies_leading_type_decl() {
     // A class seen before the member that reveals this is a compact unit must
     // become an implicit-class member too, not stay in type_decls.
     let cu: CompilationUnit = parse_str("class Helper {} void main() {}").unwrap();
-    let members = cu.implicit_class.unwrap().members;
+    let members = implicit_class(&cu).unwrap().members.clone();
     assert!(matches!(members[0], ClassBodyDecl::Class(_)));
     assert!(matches!(members[1], ClassBodyDecl::Method(_)));
 }
@@ -54,8 +83,8 @@ fn test_implicit_class_reclassifies_leading_type_decl() {
 #[test]
 fn test_ordinary_compilation_unit_has_no_implicit_class() {
     let cu: CompilationUnit = parse_str("class Foo {}").unwrap();
-    assert!(cu.implicit_class.is_none());
-    assert_eq!(cu.type_decls.len(), 1);
+    assert!(implicit_class(&cu).is_none());
+    assert_eq!(type_decls(&cu).len(), 1);
 }
 
 #[test]
@@ -74,20 +103,62 @@ fn test_implicit_class_rejects_constructor() {
 }
 
 #[test]
+fn test_implicit_class_rejects_module_declaration_before() {
+    parse_str::<CompilationUnit>("module demo {} void main() {}").unwrap_err();
+}
+
+#[test]
+fn test_implicit_class_rejects_module_declaration_after() {
+    parse_str::<CompilationUnit>("void main() {} module demo {}").unwrap_err();
+}
+
+#[test]
+fn test_import_after_compact_unit_member_rejected() {
+    parse_str::<CompilationUnit>("void main() {} import java.util.List;").unwrap_err();
+}
+
+#[test]
+fn test_import_after_leading_compact_unit_member_rejected() {
+    parse_str::<CompilationUnit>("int x; import java.util.List; void main() {}").unwrap_err();
+}
+
+#[test]
+fn test_import_after_type_decl_rejected() {
+    parse_str::<CompilationUnit>("class Foo {} import java.util.List;").unwrap_err();
+}
+
+#[test]
+fn test_import_after_module_declaration_rejected() {
+    parse_str::<CompilationUnit>("module demo {} import java.util.List;").unwrap_err();
+}
+
+#[test]
+fn test_import_after_leading_semicolon_rejected() {
+    parse_str::<CompilationUnit>("; import java.util.List; void main() {}").unwrap_err();
+}
+
+#[test]
 fn test_package_declaration() {
     let cu: CompilationUnit = parse_str("package com.example;").unwrap();
-    assert!(cu.package.is_some());
-    let pkg = cu.package.unwrap();
+    assert!(package(&cu).is_some());
+    let pkg = package(&cu).unwrap().clone();
     assert_eq!(pkg.name.segments.len(), 2);
     assert_eq!(pkg.name.segments[0].ident.name, "com");
     assert_eq!(pkg.name.segments[1].ident.name, "example");
 }
 
 #[test]
+fn test_compilation_unit_span_starts_at_package() {
+    let src = "package p; import java.util.List; class Foo {}";
+    let cu: CompilationUnit = parse_str(src).unwrap();
+    assert_eq!(cu.span().source_text(src), src);
+}
+
+#[test]
 fn test_annotated_package() {
     let cu: CompilationUnit = parse_str("@Deprecated package com.example;").unwrap();
-    assert!(cu.package.is_some());
-    let pkg = cu.package.unwrap();
+    assert!(package(&cu).is_some());
+    let pkg = package(&cu).unwrap().clone();
     assert_eq!(pkg.annotations.len(), 1);
 }
 
@@ -122,8 +193,8 @@ fn test_wildcard_import() {
 #[test]
 fn test_simple_class() {
     let cu: CompilationUnit = parse_str("public class Hello {}").unwrap();
-    assert_eq!(cu.type_decls.len(), 1);
-    match &cu.type_decls[0] {
+    assert_eq!(type_decls(&cu).len(), 1);
+    match &type_decls(&cu)[0] {
         TypeDecl::Class(cls) => {
             assert_eq!(cls.name.name, "Hello");
             assert!(!cls.modifiers.is_empty());
@@ -135,7 +206,7 @@ fn test_simple_class() {
 #[test]
 fn test_class_with_extends() {
     let cu: CompilationUnit = parse_str("class Foo extends Bar {}").unwrap();
-    match &cu.type_decls[0] {
+    match &type_decls(&cu)[0] {
         TypeDecl::Class(cls) => {
             assert!(cls.extends_clause.is_some());
         }
@@ -146,7 +217,7 @@ fn test_class_with_extends() {
 #[test]
 fn test_class_with_implements() {
     let cu: CompilationUnit = parse_str("class Foo implements Runnable, Serializable {}").unwrap();
-    match &cu.type_decls[0] {
+    match &type_decls(&cu)[0] {
         TypeDecl::Class(cls) => {
             assert!(cls.implements_clause.is_some());
             let impls = cls.implements_clause.as_ref().unwrap();
@@ -159,7 +230,7 @@ fn test_class_with_implements() {
 #[test]
 fn test_interface() {
     let cu: CompilationUnit = parse_str("public interface Runnable { void run(); }").unwrap();
-    match &cu.type_decls[0] {
+    match &type_decls(&cu)[0] {
         TypeDecl::Interface(iface) => {
             assert_eq!(iface.name.name, "Runnable");
         }
@@ -170,7 +241,7 @@ fn test_interface() {
 #[test]
 fn test_enum() {
     let cu: CompilationUnit = parse_str("enum Color { RED, GREEN, BLUE }").unwrap();
-    match &cu.type_decls[0] {
+    match &type_decls(&cu)[0] {
         TypeDecl::Enum(enm) => {
             assert_eq!(enm.name.name, "Color");
             assert_eq!(enm.body.constants.len(), 3);
@@ -182,7 +253,7 @@ fn test_enum() {
 #[test]
 fn test_record() {
     let cu: CompilationUnit = parse_str("record Point(int x, int y) {}").unwrap();
-    match &cu.type_decls[0] {
+    match &type_decls(&cu)[0] {
         TypeDecl::Record(rec) => {
             assert_eq!(rec.name.name, "Point");
             assert_eq!(rec.components.components.len(), 2);
@@ -196,7 +267,7 @@ fn test_field_declaration() {
     let cu: CompilationUnit =
         parse_str("class Foo { private int x = 42; public static final String MSG = \"hello\"; }")
             .unwrap();
-    match &cu.type_decls[0] {
+    match &type_decls(&cu)[0] {
         TypeDecl::Class(cls) => {
             assert_eq!(cls.body.declarations.len(), 2);
         }
@@ -208,7 +279,7 @@ fn test_field_declaration() {
 fn test_method_declaration() {
     let cu: CompilationUnit =
         parse_str("class Foo { public int add(int a, int b) { return a + b; } }").unwrap();
-    match &cu.type_decls[0] {
+    match &type_decls(&cu)[0] {
         TypeDecl::Class(cls) => {
             assert_eq!(cls.body.declarations.len(), 1);
             match &cls.body.declarations[0] {
@@ -227,7 +298,7 @@ fn test_method_declaration() {
 fn test_method_span_includes_return_type() {
     let src = "void main() {}";
     let cu: CompilationUnit = parse_str(src).unwrap();
-    let ClassBodyDecl::Method(m) = &cu.implicit_class.unwrap().members[0] else {
+    let ClassBodyDecl::Method(m) = &implicit_class(&cu).unwrap().members[0] else {
         panic!("expected method");
     };
     assert_eq!(m.span().source_text(src), "void main() {}");
@@ -237,7 +308,7 @@ fn test_method_span_includes_return_type() {
 fn test_primitive_return_type_span_excludes_enclosing_class() {
     let src = "class Foo { int value() {} }";
     let cu: CompilationUnit = parse_str(src).unwrap();
-    let TypeDecl::Class(cls) = &cu.type_decls[0] else {
+    let TypeDecl::Class(cls) = &type_decls(&cu)[0] else {
         panic!("expected class");
     };
     let ClassBodyDecl::Method(m) = &cls.body.declarations[0] else {
@@ -250,7 +321,7 @@ fn test_primitive_return_type_span_excludes_enclosing_class() {
 fn test_abstract_method() {
     let cu: CompilationUnit =
         parse_str("abstract class Foo { abstract void doSomething(); }").unwrap();
-    match &cu.type_decls[0] {
+    match &type_decls(&cu)[0] {
         TypeDecl::Class(cls) => match &cls.body.declarations[0] {
             ClassBodyDecl::Method(m) => {
                 assert_eq!(m.name.name, "doSomething");
@@ -265,7 +336,7 @@ fn test_abstract_method() {
 #[test]
 fn test_generic_class() {
     let cu: CompilationUnit = parse_str("class Box<T> { T value; }").unwrap();
-    match &cu.type_decls[0] {
+    match &type_decls(&cu)[0] {
         TypeDecl::Class(cls) => {
             assert!(cls.type_params.is_some());
             let tp = cls.type_params.as_ref().unwrap();
@@ -280,7 +351,7 @@ fn test_generic_class() {
 fn test_bounded_type_param() {
     let cu: CompilationUnit =
         parse_str("class Foo<T extends Comparable<T> & Serializable> {}").unwrap();
-    match &cu.type_decls[0] {
+    match &type_decls(&cu)[0] {
         TypeDecl::Class(cls) => {
             let tp = cls.type_params.as_ref().unwrap();
             assert!(tp.params[0].bound.is_some());
@@ -293,7 +364,7 @@ fn test_bounded_type_param() {
 fn test_annotation() {
     let cu: CompilationUnit =
         parse_str("@Override public class Foo { @Deprecated void old() {} }").unwrap();
-    match &cu.type_decls[0] {
+    match &type_decls(&cu)[0] {
         TypeDecl::Class(cls) => {
             // Check class annotations
             assert!(cls.modifiers.iter().any(|m| m.is_annotation()));
@@ -312,7 +383,7 @@ fn test_annotation() {
 #[test]
 fn test_annotation_with_value() {
     let cu: CompilationUnit = parse_str("@SuppressWarnings(\"unchecked\") class Foo {}").unwrap();
-    match &cu.type_decls[0] {
+    match &type_decls(&cu)[0] {
         TypeDecl::Class(cls) => {
             let ann = cls.modifiers.iter().find(|m| m.is_annotation()).unwrap();
             match ann {
@@ -499,7 +570,7 @@ fn test_text_block() {
 #[test]
 fn test_sealed_class() {
     let cu: CompilationUnit = parse_str("sealed class Shape permits Circle, Square {}").unwrap();
-    match &cu.type_decls[0] {
+    match &type_decls(&cu)[0] {
         TypeDecl::Class(cls) => {
             assert!(cls.permits_clause.is_some());
             let permits = cls.permits_clause.as_ref().unwrap();
@@ -513,8 +584,8 @@ fn test_sealed_class() {
 fn test_module_declaration() {
     let cu: CompilationUnit =
         parse_str("module com.example { requires java.base; exports com.example.api; }").unwrap();
-    assert!(cu.module.is_some());
-    let mod_decl = cu.module.unwrap();
+    assert!(module(&cu).is_some());
+    let mod_decl = module(&cu).unwrap().clone();
     assert_eq!(mod_decl.directives.len(), 2);
 }
 
@@ -580,7 +651,7 @@ fn test_instance_initializer() {
 fn test_multiple_annotations() {
     let cu: CompilationUnit =
         parse_str("@Deprecated @SuppressWarnings(\"all\") public class Foo {}").unwrap();
-    match &cu.type_decls[0] {
+    match &type_decls(&cu)[0] {
         TypeDecl::Class(cls) => {
             let ann_count = cls.modifiers.iter().filter(|m| m.is_annotation()).count();
             assert_eq!(ann_count, 2);
@@ -668,7 +739,7 @@ fn test_enum_with_body() {
     let cu: CompilationUnit = parse_str(
         "enum Color { RED(255,0,0), GREEN(0,255,0), BLUE(0,0,255); private int r,g,b; Color(int r,int g,int b){ this.r=r; this.g=g; this.b=b; } }"
     ).unwrap();
-    match &cu.type_decls[0] {
+    match &type_decls(&cu)[0] {
         TypeDecl::Enum(enm) => {
             assert_eq!(enm.body.constants.len(), 3);
             assert!(!enm.body.members.is_empty());
@@ -695,7 +766,7 @@ fn test_primitive_types() {
     let input =
         "class Foo { byte b; short s; int i; long l; float f; double d; char c; boolean z; }";
     let cu: CompilationUnit = parse_str(input).unwrap();
-    assert!(!cu.type_decls.is_empty());
+    assert!(!type_decls(&cu).is_empty());
 }
 
 #[test]
@@ -769,7 +840,7 @@ fn test_qualified_super_call_spans() {
 }
 
 fn as_class(cu: &CompilationUnit) -> &ClassDecl {
-    match &cu.type_decls[0] {
+    match &type_decls(cu)[0] {
         TypeDecl::Class(cls) => cls,
         _ => panic!("expected class declaration"),
     }
@@ -813,7 +884,7 @@ fn test_super_keyword() {
 #[test]
 fn test_doc_comment_on_class() {
     let cu: CompilationUnit = parse_str("/** A class. */\nclass Foo {}").unwrap();
-    let decl = match &cu.type_decls[0] {
+    let decl = match &type_decls(&cu)[0] {
         TypeDecl::Class(c) => c,
         _ => panic!("expected class"),
     };
@@ -824,7 +895,7 @@ fn test_doc_comment_on_class() {
 #[test]
 fn test_doc_comment_on_method() {
     let cu: CompilationUnit = parse_str("class Foo {\n/** A method. */\nvoid m() {}\n}").unwrap();
-    let class = match &cu.type_decls[0] {
+    let class = match &type_decls(&cu)[0] {
         TypeDecl::Class(c) => c,
         _ => panic!("expected class"),
     };
@@ -839,7 +910,7 @@ fn test_doc_comment_on_method() {
 #[test]
 fn test_doc_comment_on_field() {
     let cu: CompilationUnit = parse_str("class Foo {\n/** A field. */\nint x;\n}").unwrap();
-    let class = match &cu.type_decls[0] {
+    let class = match &type_decls(&cu)[0] {
         TypeDecl::Class(c) => c,
         _ => panic!("expected class"),
     };
@@ -854,7 +925,7 @@ fn test_doc_comment_on_field() {
 #[test]
 fn test_doc_line_comment_on_class() {
     let cu: CompilationUnit = parse_str("/// A class.\nclass Foo {}").unwrap();
-    let decl = match &cu.type_decls[0] {
+    let decl = match &type_decls(&cu)[0] {
         TypeDecl::Class(c) => c,
         _ => panic!("expected class"),
     };
@@ -866,7 +937,7 @@ fn test_doc_line_comment_on_class() {
 fn test_regular_comment_on_statement() {
     let cu: CompilationUnit =
         parse_str("class Foo {\nvoid m() {\n// a comment\nint x = 1;\n}\n}").unwrap();
-    let class = match &cu.type_decls[0] {
+    let class = match &type_decls(&cu)[0] {
         TypeDecl::Class(c) => c,
         _ => panic!("expected class"),
     };
@@ -887,7 +958,7 @@ fn test_regular_comment_on_statement() {
 fn test_block_comment_on_statement() {
     let cu: CompilationUnit =
         parse_str("class Foo {\nvoid m() {\n/* block */\nint x = 1;\n}\n}").unwrap();
-    let class = match &cu.type_decls[0] {
+    let class = match &type_decls(&cu)[0] {
         TypeDecl::Class(c) => c,
         _ => panic!("expected class"),
     };
@@ -908,7 +979,7 @@ fn test_block_comment_on_statement() {
 fn test_multiple_doc_comments() {
     let cu: CompilationUnit =
         parse_str("/// Line 1\n/// Line 2\n/** Block doc. */\nclass Foo {}").unwrap();
-    let decl = match &cu.type_decls[0] {
+    let decl = match &type_decls(&cu)[0] {
         TypeDecl::Class(c) => c,
         _ => panic!("expected class"),
     };
@@ -922,7 +993,7 @@ fn test_multiple_doc_comments() {
 fn test_regular_comment_skipped_for_items() {
     // Regular comments before items should NOT attach as doc comments
     let cu: CompilationUnit = parse_str("// regular\nclass Foo {}").unwrap();
-    let decl = match &cu.type_decls[0] {
+    let decl = match &type_decls(&cu)[0] {
         TypeDecl::Class(c) => c,
         _ => panic!("expected class"),
     };
@@ -939,7 +1010,7 @@ fn test_comments_collected_in_compilation_unit() {
 #[test]
 fn test_doc_comment_on_interface() {
     let cu: CompilationUnit = parse_str("/** An interface. */\ninterface Foo {}").unwrap();
-    let decl = match &cu.type_decls[0] {
+    let decl = match &type_decls(&cu)[0] {
         TypeDecl::Interface(i) => i,
         _ => panic!("expected interface"),
     };
@@ -950,7 +1021,7 @@ fn test_doc_comment_on_interface() {
 #[test]
 fn test_doc_comment_on_enum() {
     let cu: CompilationUnit = parse_str("/** An enum. */\nenum Foo { A, B }").unwrap();
-    let decl = match &cu.type_decls[0] {
+    let decl = match &type_decls(&cu)[0] {
         TypeDecl::Enum(e) => e,
         _ => panic!("expected enum"),
     };
@@ -961,7 +1032,7 @@ fn test_doc_comment_on_enum() {
 #[test]
 fn test_doc_comment_on_record() {
     let cu: CompilationUnit = parse_str("/** A record. */\nrecord Foo(int x) {}").unwrap();
-    let decl = match &cu.type_decls[0] {
+    let decl = match &type_decls(&cu)[0] {
         TypeDecl::Record(r) => r,
         _ => panic!("expected record"),
     };
@@ -973,12 +1044,12 @@ fn test_doc_comment_on_record() {
 fn test_comment_between_items_not_attached() {
     let cu: CompilationUnit =
         parse_str("/** Doc A. */\nclass A {}\n// between\n/** Doc B. */\nclass B {}").unwrap();
-    let a = match &cu.type_decls[0] {
+    let a = match &type_decls(&cu)[0] {
         TypeDecl::Class(c) => c,
         _ => panic!("expected class A"),
     };
     assert_eq!(a.doc_comment.len(), 1);
-    let b = match &cu.type_decls[1] {
+    let b = match &type_decls(&cu)[1] {
         TypeDecl::Class(c) => c,
         _ => panic!("expected class B"),
     };

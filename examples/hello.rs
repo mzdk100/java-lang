@@ -36,7 +36,7 @@
 //! let unit: CompilationUnit = parse_str(java_source).unwrap();
 //!
 //! // Access parsed elements
-//! if let Some(pkg) = &unit.package {
+//! if let Some(pkg) = unit.package() {
 //!     println!("Package: {}", pkg.name);
 //! }
 //!
@@ -44,7 +44,7 @@
 //!     println!("Import: {:?}", import_decl);
 //! }
 //!
-//! for type_decl in &unit.type_decls {
+//! for type_decl in unit.type_decls() {
 //!     match type_decl {
 //!         java_lang::ast::TypeDecl::Class(cls) => {
 //!             println!("Class: {}", cls.name);
@@ -130,7 +130,7 @@ public class Example {
 
     println!("=== Parsed Java Source ===\n");
 
-    if let Some(pkg) = &unit.package {
+    if let Some(pkg) = unit.package() {
         println!("Package: {}", pkg.name);
     }
 
@@ -139,8 +139,8 @@ public class Example {
         println!("  - {:?}", imp);
     }
 
-    println!("\nType declarations ({}):", unit.type_decls.len());
-    for td in &unit.type_decls {
+    println!("\nType declarations ({}):", unit.type_decls().len());
+    for td in unit.type_decls() {
         if let java_lang::ast::TypeDecl::Class(cls) = td {
             println!("  class {} ({:?})", cls.name, cls.name.span);
             for modifier in &cls.modifiers {

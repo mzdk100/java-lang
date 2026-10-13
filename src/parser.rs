@@ -26,6 +26,9 @@ impl Parse for CompilationUnit {
         let mut type_decls: Vec<TypeDecl> = Vec::new();
         let mut implicit_members: Vec<ClassBodyDecl> = Vec::new();
         let mut is_compact_unit = false;
+        // Whether any member (type declaration or compact-unit member) has been
+        // seen yet. JLS §7.3 requires imports to precede all of them.
+        let mut seen_member = false;
 
         while !input.is_empty() {
             if input.is(&TokenKind::Semicolon) {
@@ -38,6 +41,7 @@ impl Parse for CompilationUnit {
                 } else {
                     type_decls.push(TypeDecl::Empty(sp));
                 }
+                seen_member = true;
                 continue;
             }
             if input.is(&TokenKind::At) || input.is(&TokenKind::Package) {
@@ -51,6 +55,12 @@ impl Parse for CompilationUnit {
                 input.set_cursor(saved);
             }
             if input.is(&TokenKind::Import) {
+                if seen_member {
+                    return Err(crate::error::Error::new(
+                        input.peek().span,
+                        "import declarations must precede all type declarations and members",
+                    ));
+                }
                 imports.push(input.parse()?);
                 continue;
             }
@@ -64,6 +74,7 @@ impl Parse for CompilationUnit {
                 if let Some(mut mod_decl) = input.try_parse(ModuleDecl::parse) {
                     mod_decl.doc_comment = doc_comment;
                     module = Some(mod_decl);
+                    seen_member = true;
                     continue;
                 }
                 input.set_cursor(saved);
@@ -74,6 +85,7 @@ impl Parse for CompilationUnit {
                 if let Some(mut type_decl) = input.try_parse(TypeDecl::parse) {
                     set_type_decl_doc_comment(&mut type_decl, doc_comment);
                     type_decls.push(type_decl);
+                    seen_member = true;
                     continue;
                 }
                 input.set_cursor(saved);
@@ -92,6 +104,7 @@ impl Parse for CompilationUnit {
                 ));
             }
             set_class_body_decl_doc_comment(&mut member, doc_comment);
+            seen_member = true;
             if !is_compact_unit {
                 // First member not expressible as a top-level type declaration: this
                 // is a compact compilation unit. Every type declaration collected so
@@ -105,11 +118,17 @@ impl Parse for CompilationUnit {
         // Collect any remaining comments at the end of the file
         let comments = input.collect_pending_comments();
 
-        let implicit_class = if is_compact_unit {
+        let kind = if is_compact_unit {
             if let Some(pkg) = &package {
                 return Err(crate::error::Error::new(
                     pkg.span,
                     "a compact compilation unit cannot have a package declaration",
+                ));
+            }
+            if let Some(m) = &module {
+                return Err(crate::error::Error::new(
+                    m.span(),
+                    "a compact compilation unit cannot have a module declaration",
                 ));
             }
             if !implicit_members
@@ -124,20 +143,34 @@ impl Parse for CompilationUnit {
                     "a compact compilation unit must declare at least one method",
                 ));
             }
-            Some(ImplicitClassDecl {
+            CompilationUnitKind::Compact(ImplicitClassDecl {
                 members: implicit_members,
             })
+        } else if let Some(m) = module {
+            if let Some(pkg) = &package {
+                return Err(crate::error::Error::new(
+                    pkg.span,
+                    "a module declaration cannot have a package declaration",
+                ));
+            }
+            if !type_decls.is_empty() {
+                return Err(crate::error::Error::new(
+                    m.span(),
+                    "a module declaration cannot be combined with top-level type declarations",
+                ));
+            }
+            CompilationUnitKind::Modular(m)
         } else {
-            None
+            CompilationUnitKind::Ordinary {
+                package,
+                type_decls,
+            }
         };
 
         Ok(Self {
             comments,
-            package,
             imports,
-            type_decls,
-            module,
-            implicit_class,
+            kind,
         })
     }
 }
