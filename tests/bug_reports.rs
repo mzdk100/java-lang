@@ -131,7 +131,7 @@ fn bug_06_nested_type_witness() {
 /// Source: <https://github.com/junit-team/junit5/blob/1ef55a6a9a2430ae274165bfcc4251d5e147b803/platform-tooling-support-tests/projects/junit-start/modular/p/MultiplicationTests.java#L13>.
 #[test]
 fn bug_07_module_import() {
-    rejects(
+    accepts(
         r#"import module org.junit.jupiter.api;
 
 class Foo {

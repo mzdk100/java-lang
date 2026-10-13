@@ -91,6 +91,13 @@ pub enum ImportDecl {
         star_span: Span,
         semi_span: Span,
     },
+    /// Module import: `import module org.junit.jupiter.api;`
+    Module {
+        import_span: Span,
+        module_span: Span,
+        name: Path,
+        semi_span: Span,
+    },
 }
 
 impl ImportDecl {
@@ -112,6 +119,11 @@ impl ImportDecl {
                 ..
             }
             | Self::StaticOnDemand {
+                import_span,
+                semi_span,
+                ..
+            }
+            | Self::Module {
                 import_span,
                 semi_span,
                 ..

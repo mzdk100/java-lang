@@ -45,7 +45,7 @@ impl Parse for CompilationUnit {
             }
             // Collect doc comments before the declaration
             let doc_comment = input.collect_pending_doc_comments();
-            if input.is(&TokenKind::At) || input.is_ident("module") || input.is(&TokenKind::Open) {
+            if input.is(&TokenKind::At) || input.is(&TokenKind::Module) || input.is(&TokenKind::Open) {
                 let saved = input.cursor();
                 if let Some(mut mod_decl) = input.try_parse(ModuleDecl::parse) {
                     mod_decl.doc_comment = doc_comment;
@@ -119,6 +119,24 @@ impl Parse for ImportDecl {
         let import_span = input.peek().span;
         input.expect(TokenKind::Import)?;
 
+        if input.is(&TokenKind::Module) {
+            let saved = input.cursor();
+            let module_span = input.peek().span;
+            input.next();
+            if input.is_any_ident() {
+                let name = parse_path(input)?;
+                input.expect(TokenKind::Semicolon)?;
+                let semi_span = input.peek().span;
+                return Ok(Self::Module {
+                    import_span,
+                    module_span,
+                    name,
+                    semi_span,
+                });
+            }
+            input.set_cursor(saved);
+        }
+
         let is_static = input.eat(&TokenKind::Static);
         let static_span = if is_static {
             Some(input.peek().span)
@@ -187,7 +205,7 @@ impl Parse for ModuleDecl {
             None
         };
         let module_span = input.peek().span;
-        if !input.is_ident("module") {
+        if !input.is(&TokenKind::Module) {
             return Err(crate::error::Error::new(
                 input.peek().span,
                 "expected 'module'",
