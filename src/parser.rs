@@ -2106,8 +2106,8 @@ fn parse_block(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Bl
         }
         stmts.push(parse_statement(input)?);
     }
-    input.expect(TokenKind::RBrace)?;
     let close = input.peek().span;
+    input.expect(TokenKind::RBrace)?;
     Ok(Block {
         leading_comments,
         brace_span: (open, close),
@@ -3318,6 +3318,7 @@ fn can_start_unary_expr(kind: &TokenKind) -> bool {
             | TokenKind::BoolLit(_)
             | TokenKind::NullLit
             | TokenKind::Ident(_)
+            | TokenKind::Underscore
             | TokenKind::Record
             | TokenKind::Sealed
             | TokenKind::Var
@@ -3727,26 +3728,6 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
                 if can_be_cast {
                     input.next();
                     let close = input.peek().span;
-                    // Could be cast or lambda with typed params
-                    // If next is '->', it's a lambda
-                    if input.is(&TokenKind::Arrow) {
-                        let arrow_span = input.peek().span;
-                        input.next();
-                        let body = parse_lambda_body(input)?;
-                        return Ok(Expr::Lambda(LambdaExpr {
-                            params: LambdaParams::List {
-                                paren_span: (open, close),
-                                params: vec![LambdaParam {
-                                    modifiers: vec![],
-                                    ty,
-                                    name: crate::ident::Ident::new("_".to_string(), span),
-                                }],
-                            },
-                            arrow_span,
-                            body,
-                            span: open.join(input.peek().span),
-                        }));
-                    }
                     let expr = parse_unary_expr(input)?;
                     // For intersection types, we create a special cast expression
                     // For now, we just use the first type (could be enhanced later)
@@ -3765,7 +3746,6 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
         // Cursor is at ')' (the first token after the consumed '(').
         // Scan forward: look_ahead(0) is ')', which matches our '('.
         {
-            let lambda_saved = input.cursor();
             let mut depth = 1;
             let mut offset = 0;
             loop {
@@ -3788,18 +3768,9 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
             if input.look_ahead(offset + 1).kind == TokenKind::Arrow {
                 // Parse lambda params (cursor is after '('; parse_lambda_params_after_lparen
                 // handles parsing until ')')
-                let params = parse_lambda_params_after_lparen(input)?;
-                let arrow_span = input.peek().span;
-                input.next();
-                let body = parse_lambda_body(input)?;
-                return Ok(Expr::Lambda(LambdaExpr {
-                    params,
-                    arrow_span,
-                    body,
-                    span: open.join(input.peek().span),
-                }));
+                let params = parse_lambda_params_after_lparen(input, open)?;
+                return parse_lambda(input, params, open);
             }
-            input.set_cursor(lambda_saved);
         }
 
         // Parenthesized expression
@@ -3861,6 +3832,12 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
         TokenKind::New => parse_new_expr(input),
         TokenKind::Switch => parse_switch_expr(input),
         TokenKind::LBrace => Ok(Expr::ArrayInit(parse_array_init(input)?)),
+        TokenKind::Underscore if input.look_ahead(1).kind == TokenKind::Arrow => {
+            // Single unnamed lambda parameter: `_ -> expr` (JLS §15.27.1)
+            let name = parse_lambda_param_name(input)?;
+            let start = name.span();
+            parse_lambda(input, LambdaParams::Single(name), start)
+        }
         _ => {
             // Check for identifier (possibly with method reference)
             // Also allow primitive type keywords and void as identifiers for .class expressions
@@ -3872,17 +3849,12 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
                 let ident = input.parse_ident()?;
                 // Check for single-param lambda: `x -> expr`
                 if input.is(&TokenKind::Arrow) {
-                    let ident_span = ident.span;
-                    let arrow_span = input.peek().span;
-                    input.next();
-                    let body = parse_lambda_body(input)?;
-                    let end = body.span();
-                    return Ok(Expr::Lambda(LambdaExpr {
-                        params: LambdaParams::Single(ident),
-                        arrow_span,
-                        body,
-                        span: ident_span.join(end),
-                    }));
+                    let start = ident.span();
+                    return parse_lambda(
+                        input,
+                        LambdaParams::Single(LambdaParamName::Named(ident)),
+                        start,
+                    );
                 }
                 // Check for type arguments followed by :: (method reference with type args)
                 // e.g., Collection<T>::add, Class<?>[]::new
@@ -3933,56 +3905,68 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
     }
 }
 
-fn parse_lambda_params_after_lparen(input: &ParseStream) -> Result<LambdaParams> {
-    let open = input.peek().span;
+/// Parse a lambda parameter's `VariableDeclaratorId`/`ConciseLambdaParameter`
+/// name, which may be a real identifier or the unnamed-variable keyword `_`
+fn parse_lambda_param_name(input: &ParseStream) -> Result<LambdaParamName> {
+    if input.is(&TokenKind::Underscore) {
+        let span = input.next().span;
+        Ok(LambdaParamName::Unnamed(span))
+    } else {
+        input.parse_ident().map(LambdaParamName::Named)
+    }
+}
+
+fn parse_lambda(input: &ParseStream, params: LambdaParams, start: Span) -> Result<Expr> {
+    let arrow_span = input.peek().span;
+    input.expect(TokenKind::Arrow)?;
+    let body = parse_lambda_body(input)?;
+    let end = body.span();
+    Ok(Expr::Lambda(LambdaExpr {
+        params,
+        arrow_span,
+        body,
+        span: start.join(end),
+    }))
+}
+
+fn parse_lambda_params_after_lparen(input: &ParseStream, open: Span) -> Result<LambdaParams> {
     let mut params = Vec::new();
     let mut idents = Vec::new();
 
     while !input.is(&TokenKind::RParen) && !input.is_empty() {
         let saved = input.cursor();
         // Try to parse as typed parameter: Type name
-        if let Ok(ty) = parse_type(input) {
-            if input.is_any_ident() {
-                let name = input.parse_ident()?;
-                params.push(LambdaParam {
-                    modifiers: vec![],
-                    ty,
-                    name,
-                });
-                if !input.eat(&TokenKind::Comma) {
-                    break;
-                }
-                continue;
-            }
-            input.set_cursor(saved);
+        let typed = parse_type(input)
+            .ok()
+            .filter(|_| input.is_any_ident() || input.is(&TokenKind::Underscore));
+        if let Some(ty) = typed {
+            let name = parse_lambda_param_name(input)?;
+            params.push(LambdaParam {
+                modifiers: vec![],
+                ty,
+                name,
+            });
         } else {
             input.set_cursor(saved);
+            idents.push(parse_lambda_param_name(input)?);
         }
-        // Parse as inferred parameter: just an ident
-        let ident = input.parse_ident()?;
-        idents.push(ident);
         if !input.eat(&TokenKind::Comma) {
             break;
         }
     }
 
-    input.expect(TokenKind::RParen)?;
     let close = input.peek().span;
+    input.expect(TokenKind::RParen)?;
 
-    if !params.is_empty() && idents.is_empty() {
+    if !params.is_empty() && !idents.is_empty() {
+        Err(crate::error::Error::new(
+            open.join(close),
+            "cannot mix typed and inferred lambda parameters",
+        ))
+    } else if !params.is_empty() {
         Ok(LambdaParams::List {
             paren_span: (open, close),
             params,
-        })
-    } else if params.is_empty() && !idents.is_empty() {
-        Ok(LambdaParams::IdentList {
-            paren_span: (open, close),
-            idents,
-        })
-    } else if params.is_empty() && idents.is_empty() {
-        Ok(LambdaParams::IdentList {
-            paren_span: (open, close),
-            idents: vec![],
         })
     } else {
         Ok(LambdaParams::IdentList {

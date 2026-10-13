@@ -404,18 +404,34 @@ pub struct LambdaExpr {
 /// Lambda parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LambdaParams {
-    /// `(Type name, Type name, ...)`
+    /// `(Type name, Type _, ...)`
     List {
         paren_span: (Span, Span),
         params: Vec<LambdaParam>,
     },
-    /// `(name, name, ...)` (inferred types)
+    /// `(name, _, ...)` (inferred types)
     IdentList {
         paren_span: (Span, Span),
-        idents: Vec<Ident>,
+        idents: Vec<LambdaParamName>,
     },
-    /// `name` (single inferred parameter)
-    Single(Ident),
+    /// `name` or `_` (single inferred parameter)
+    Single(LambdaParamName),
+}
+
+/// A lambda parameter's name, or an underscore for an unnamed parameter.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum LambdaParamName {
+    Named(Ident),
+    Unnamed(Span),
+}
+
+impl LambdaParamName {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Named(ident) => ident.span(),
+            Self::Unnamed(span) => *span,
+        }
+    }
 }
 
 /// A lambda parameter with explicit type.
@@ -423,7 +439,7 @@ pub enum LambdaParams {
 pub struct LambdaParam {
     pub modifiers: Vec<super::item::Modifier>,
     pub ty: Type,
-    pub name: Ident,
+    pub name: LambdaParamName,
 }
 
 /// Lambda body: either an expression or a block.

@@ -302,6 +302,57 @@ fn test_lambda() {
 }
 
 #[test]
+fn test_lambda_parameter_names() {
+    for expression in [
+        "x -> x",
+        "_ -> 0",
+        "() -> {}",
+        "(_) -> {}",
+        "(_, _) -> {}",
+        "(x, _) -> x",
+        "(String _) -> 0",
+        "(String x, String _) -> x",
+        "(String _, String _) -> {}",
+    ] {
+        let source = format!("class Foo {{ Object f = {expression}; }}");
+        assert!(
+            parse_str::<CompilationUnit>(&source).is_ok(),
+            "{expression}"
+        );
+    }
+}
+
+#[test]
+fn test_invalid_lambda_parameter_names() {
+    for expression in [
+        "(123) -> 0",
+        "(_, 123) -> 0",
+        "(String 123) -> 0",
+        "_",
+        "(String x, y) -> 0",
+        "(x, String y) -> 0",
+        "(String _, _) -> 0",
+        "(_, String _) -> 0",
+    ] {
+        let source = format!("class Foo {{ Object f = {expression}; }}");
+        assert!(
+            parse_str::<CompilationUnit>(&source).is_err(),
+            "{expression}"
+        );
+    }
+}
+
+#[test]
+fn test_cast_unnamed_lambda() {
+    parse_str::<CompilationUnit>(
+        "class Foo {
+            Object f = (java.util.function.Function<String, Integer>) _ -> 0;
+        }",
+    )
+    .unwrap();
+}
+
+#[test]
 fn test_method_reference() {
     let _cu: CompilationUnit =
         parse_str("class Foo { void m() { var r = String::length; } }").unwrap();

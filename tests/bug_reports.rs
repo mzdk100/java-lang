@@ -92,7 +92,7 @@ module org.example {
 /// Source: <https://github.com/junit-team/junit5/blob/1ef55a6a9a2430ae274165bfcc4251d5e147b803/jupiter-tests/src/test/java/org/junit/jupiter/engine/extension/TempDirectoryTests.java#L1261>.
 #[test]
 fn bug_05_unnamed_lambdas() {
-    rejects(
+    accepts(
         r#"class Foo {
     void bar() {
         Runnable r = () -> {};
@@ -214,7 +214,7 @@ fn bug_11_qualified_constructor_reference() {
 /// Source: <https://github.com/junit-team/junit5/blob/1ef55a6a9a2430ae274165bfcc4251d5e147b803/jupiter-tests/src/test/java/org/junit/jupiter/engine/extension/TempDirectoryTests.java#L1261>.
 #[test]
 fn bug_05_single_unnamed_lambda() {
-    rejects(
+    accepts(
         "class Foo { void bar() { java.util.function.Function<String, Integer> f = _ -> 0; } }",
     );
 }
@@ -222,7 +222,7 @@ fn bug_05_single_unnamed_lambda() {
 /// Source: <https://github.com/junit-team/junit5/blob/1ef55a6a9a2430ae274165bfcc4251d5e147b803/jupiter-tests/src/test/java/org/junit/jupiter/engine/extension/CloseablePathTests.java#L134>.
 #[test]
 fn bug_05_multiple_unnamed_lambda() {
-    rejects(
+    accepts(
         "class Foo { void bar() { java.util.function.BiConsumer<String, String> c = (_, _) -> {}; } }",
     );
 }
