@@ -185,6 +185,8 @@ pub enum MethodRefTarget {
         dot_span: Span,
         super_span: Span,
     },
+    /// `ArrayType::new`, e.g. `int[]::new`, `List<?>[]::new` (JLS §15.13).
+    ArrayType(Type),
 }
 
 impl MethodRefTarget {
@@ -198,6 +200,7 @@ impl MethodRefTarget {
                 super_span,
                 ..
             } => type_name.span.join(*super_span),
+            Self::ArrayType(ty) => ty.span(),
         }
     }
 }

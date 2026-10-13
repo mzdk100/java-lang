@@ -200,7 +200,7 @@ class Sub extends Outer.Inner {
 /// Source: <https://github.com/google/guava/blob/6b3a8d7498a7fde122967ba37a023ba3dcb47792/guava/src/com/google/common/collect/CollectCollectors.java#L192>.
 #[test]
 fn bug_11_qualified_constructor_reference() {
-    rejects(
+    accepts(
         r#"class Foo {
     void bar() {
         x = Builder<K, V>::new;             // OK: single-segment path
@@ -256,7 +256,7 @@ fn bug_06_additional_examples() {
 /// Source: <https://github.com/apache/calcite/blob/8f27e24a02e7b76fc40b6cfd9b1d2cc96bc8b1b6/core/src/main/java/org/apache/calcite/plan/volcano/RelSubset.java#L671>.
 #[test]
 fn bug_11_qualified_method_reference() {
-    rejects(
+    accepts(
         r#"class Foo {
     void bar() {
         z = Map.Entry<String, Long>::getValue; // fails the same way

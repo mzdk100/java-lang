@@ -3447,6 +3447,20 @@ fn peek_dot_super_call(input: &ParseStream) -> bool {
 }
 
 fn parse_postfix_expr_impl(input: &ParseStream, stop_before_super_call: bool) -> Result<Expr> {
+    if is_any_ident_kind(&input.peek().kind) || is_primitive_type_token(&input.peek().kind) {
+        let saved = input.save_state();
+        if let Ok(ty) = parse_type(input)
+            && input.is(&TokenKind::ColonColon)
+        {
+            if let Type::Reference(ReferenceType::Array(_)) = &ty {
+                return Ok(Expr::MethodRef(parse_array_method_ref_tail(input, ty)?));
+            } else if let Type::Reference(ReferenceType::ClassOrInterfaceType(c)) = ty {
+                return Ok(Expr::MethodRef(parse_method_ref_tail(input, c.path)?));
+            }
+        }
+        input.restore_state(saved);
+    }
+
     let mut expr = parse_primary_expr(input)?;
 
     loop {
@@ -3637,12 +3651,15 @@ fn parse_postfix_expr_impl(input: &ParseStream, stop_before_super_call: bool) ->
                             class_span,
                         };
                     } else if input.is(&TokenKind::ColonColon) {
-                        // Method reference with array type: e.g., `ComponentName[]::new`
-                        // Skip the `[]` — the `::` handler below will handle the rest
-                        // The expression remains as the base identifier, which will be
-                        // converted to a path by the `::` handler. Not perfect for array
-                        // types but better than failing.
-                        // Leave expr as-is (the base identifier)
+                        // Array-type method reference (e.g. `ComponentName[]::new`) is
+                        // handled up front in parse_postfix_expr_impl via parse_type, since
+                        // the target must be a syntactic ArrayType, not an arbitrary
+                        // expression with trailing `[]`. Reaching here means `expr` isn't
+                        // a valid ArrayType element type.
+                        return Err(crate::error::Error::new(
+                            open,
+                            "array type method reference target must be a type",
+                        ));
                     } else {
                         // Standalone empty `[]` — probably a syntax error in context,
                         // but recover gracefully by treating as array type expression
@@ -3753,6 +3770,52 @@ fn expr_to_type(expr: &Expr) -> Result<Type> {
         }
         _ => Err(crate::error::Error::new(expr.span(), "expected type")),
     }
+}
+
+fn parse_method_ref_tail(input: &ParseStream, path: Path) -> Result<MethodRefExpr> {
+    let colon_colon_span = input.peek().span;
+    input.expect(TokenKind::ColonColon)?;
+    let type_args = parse_optional_type_arguments(input);
+    let method_name = if input.is(&TokenKind::New) {
+        let name = Ident::new("new".to_string(), input.peek().span);
+        input.next();
+        name
+    } else {
+        input.parse_ident()?
+    };
+    Ok(MethodRefExpr {
+        target: MethodRefTarget::Type(path),
+        colon_colon_span,
+        type_args,
+        method_name,
+    })
+}
+
+/// Parse the `::` tail of an array-type method reference. Per JLS §15.13, an array
+/// type target supports both `ArrayType :: new` (array creation; no `[TypeArguments]`
+/// allowed) and the ordinary `ReferenceType :: [TypeArguments] Identifier` form, e.g.
+/// `int[]::new` and `int[]::clone`.
+fn parse_array_method_ref_tail(input: &ParseStream, ty: Type) -> Result<MethodRefExpr> {
+    let colon_colon_span = input.peek().span;
+    input.expect(TokenKind::ColonColon)?;
+    if input.is(&TokenKind::New) {
+        let method_name_span = input.peek().span;
+        input.next();
+        return Ok(MethodRefExpr {
+            target: MethodRefTarget::ArrayType(ty),
+            colon_colon_span,
+            type_args: None,
+            method_name: Ident::new("new".to_string(), method_name_span),
+        });
+    }
+    let type_args = parse_optional_type_arguments(input);
+    let method_name = input.parse_ident()?;
+    Ok(MethodRefExpr {
+        target: MethodRefTarget::ArrayType(ty),
+        colon_colon_span,
+        type_args,
+        method_name,
+    })
 }
 
 fn expr_to_path(expr: Expr) -> Result<Path> {

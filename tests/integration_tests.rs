@@ -359,6 +359,44 @@ fn test_method_reference() {
 }
 
 #[test]
+fn test_method_reference_qualified_generic_target() {
+    let _cu: CompilationUnit =
+        parse_str("class Foo { void m() { var r = Outer<String>.Inner<Integer>::get; } }").unwrap();
+}
+
+#[test]
+fn test_method_reference_array_type_target() {
+    let _cu: CompilationUnit =
+        parse_str("class Foo { void m() { var r = java.util.List<?>[]::new; } }").unwrap();
+}
+
+#[test]
+fn test_method_reference_array_type_non_constructor() {
+    for src in [
+        "class Foo { void bar() { x = String[]::clone; } }",
+        "class Foo { void bar() { x = int[]::clone; } }",
+        "class Foo { void bar() { x = java.util.List<?>[]::clone; } }",
+    ] {
+        parse_str::<CompilationUnit>(src).unwrap();
+    }
+}
+
+#[test]
+fn test_lt_and_method_ref_disambiguation() {
+    for src in [
+        "class Foo { void bar() { boolean b = a < c; } }",
+        "class Foo { void bar() { boolean b = a.b < c; } }",
+        "class Foo { void bar() { List<String> l = new ArrayList<>(); } }",
+        "class Foo { void bar() { int x = Collections.<String>emptyList().size(); } }",
+        "class Foo { void bar() { Runnable r = String::new; } }",
+        "class Foo { void bar() { Runnable r = int[]::new; } }",
+        "class Foo { void bar() { Runnable r = ArrayList<String>::new; } }",
+    ] {
+        parse_str::<CompilationUnit>(src).unwrap();
+    }
+}
+
+#[test]
 fn test_switch_expression() {
     let _cu: CompilationUnit = parse_str(
         "class Foo { int m(int x) { return switch (x) { case 1 -> 1; case 2 -> 2; default -> 0; }; } }"
