@@ -114,7 +114,7 @@ fn bug_05_unnamed_lambdas() {
 /// Source: <https://github.com/spring-projects/spring-boot/blob/bd0300809876f7aeec5e3638a487c8c46a3219ec/core/spring-boot/src/test/java/org/springframework/boot/context/properties/bind/MapBinderTests.java#L143>.
 #[test]
 fn bug_06_nested_type_witness() {
-    rejects(
+    accepts(
         r#"class Foo {
     void bar() {
         a.<B<C<D>>>m();
@@ -227,7 +227,7 @@ fn bug_05_multiple_unnamed_lambda() {
     );
 }
 
-/// Two levels parse successfully; three levels reproduce the parser failure.
+/// Two levels and three levels of generic nesting both parse successfully.
 ///
 /// Source: <https://github.com/google/guava/blob/6b3a8d7498a7fde122967ba37a023ba3dcb47792/guava/src/com/google/common/collect/TreeRangeSet.java#L796>.
 /// Source: <https://github.com/spring-projects/spring-boot/blob/bd0300809876f7aeec5e3638a487c8c46a3219ec/core/spring-boot/src/test/java/org/springframework/boot/context/properties/bind/ValueObjectBinderTests.java#L351>.
@@ -241,10 +241,10 @@ fn bug_06_additional_examples() {
 }
 "#,
     );
-    rejects(
+    accepts(
         r#"class Foo {
     void bar() {
-        a.<B<C<D>>>m(); // fails
+        a.<B<C<D>>>m(); // also parses correctly
     }
 }
 "#,

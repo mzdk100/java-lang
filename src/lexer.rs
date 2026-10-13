@@ -354,17 +354,9 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     if let Some((_, '=')) = self.peek_char() {
                         self.advance();
-                        Some(Token::new(TokenKind::GtGtEq, self.span_since(start)))
-                    } else if let Some((_, '>')) = self.peek_char() {
-                        self.advance();
-                        if let Some((_, '=')) = self.peek_char() {
-                            self.advance();
-                            Some(Token::new(TokenKind::GtGtGtEq, self.span_since(start)))
-                        } else {
-                            Some(Token::new(TokenKind::GtGtGt, self.span_since(start)))
-                        }
+                        Some(Token::new(TokenKind::GtGtGtEq, self.span_since(start)))
                     } else {
-                        Some(Token::new(TokenKind::GtGt, self.span_since(start)))
+                        Some(Token::new(TokenKind::GtGtGt, self.span_since(start)))
                     }
                 } else if let Some((_, '=')) = self.peek_char() {
                     self.advance();
@@ -700,6 +692,31 @@ mod tests {
         assert_eq!(kinds[8], TokenKind::Arrow);
         assert_eq!(kinds[9], TokenKind::ColonColon);
         assert_eq!(kinds[10], TokenKind::Ellipsis);
+    }
+
+    #[test]
+    fn test_gt_operators() {
+        let source = "> >= >> >>= >>> >>>= >>>> >>>>=";
+        let tokens = tokenize(source);
+        let kinds: Vec<_> = tokens.iter().map(|t| t.kind.clone()).collect();
+        assert_eq!(kinds[0], TokenKind::Gt);
+        assert_eq!(kinds[1], TokenKind::GtEq);
+        assert_eq!(kinds[2], TokenKind::GtGt);
+        assert_eq!(kinds[3], TokenKind::GtGtEq);
+        assert_eq!(kinds[4], TokenKind::GtGtGt);
+        assert_eq!(kinds[5], TokenKind::GtGtGtEq);
+        assert_eq!(kinds[6], TokenKind::GtGtGt);
+        assert_eq!(kinds[7], TokenKind::Gt);
+        assert_eq!(kinds[8], TokenKind::GtGtGt);
+        assert_eq!(kinds[9], TokenKind::GtEq);
+        assert_eq!(kinds[10], TokenKind::Eof);
+        let spans: Vec<_> = tokens.iter().map(|t| t.span.source_text(source)).collect();
+        assert_eq!(
+            spans,
+            [
+                ">", ">=", ">>", ">>=", ">>>", ">>>=", ">>>", ">", ">>>", ">=", ""
+            ]
+        );
     }
 
     #[test]
