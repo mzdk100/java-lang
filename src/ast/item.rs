@@ -352,7 +352,11 @@ pub struct FieldDecl {
 
 impl FieldDecl {
     pub fn span(&self) -> Span {
-        let start = self.doc_comment.first().map_or(self.semi_span, |c| c.span);
+        let code_start = self
+            .modifiers
+            .first()
+            .map_or_else(|| self.ty.span(), |m| m.span());
+        let start = self.doc_comment.first().map_or(code_start, |c| c.span);
         start.join(self.semi_span)
     }
 }
@@ -378,10 +382,14 @@ impl MethodDecl {
             Some(b) => b.brace_span.1,
             None => self.paren_span.1,
         };
-        let code_start = self
-            .modifiers
-            .first()
-            .map_or(self.name.span(), |m| m.span());
+        let code_start = self.modifiers.first().map_or_else(
+            || {
+                self.type_params
+                    .as_ref()
+                    .map_or_else(|| self.return_type.span(), |tp| tp.lt_span)
+            },
+            |m| m.span(),
+        );
         let start = self.doc_comment.first().map_or(code_start, |c| c.span);
         start.join(end)
     }
@@ -401,6 +409,15 @@ impl From<Type> for MethodReturnType {
         match ty {
             Type::Void(span) => MethodReturnType::Void(span),
             other => MethodReturnType::Type(other),
+        }
+    }
+}
+
+impl MethodReturnType {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Type(ty) => ty.span(),
+            Self::Void(span) => *span,
         }
     }
 }

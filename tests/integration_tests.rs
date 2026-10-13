@@ -19,6 +19,20 @@ fn test_implicit_class_compact_compilation_unit() {
 }
 
 #[test]
+fn test_implicit_class_compilation_unit_span() {
+    let src = "void main() {} ;";
+    let cu: CompilationUnit = parse_str(src).unwrap();
+    assert_eq!(cu.span().source_text(src), src);
+}
+
+#[test]
+fn test_implicit_class_span_includes_leading_field() {
+    let src = "int x; void main() {}";
+    let cu: CompilationUnit = parse_str(src).unwrap();
+    assert_eq!(cu.span().source_text(src), src);
+}
+
+#[test]
 fn test_implicit_class_mixed_members() {
     let cu: CompilationUnit = parse_str("int x; void main() {} class Nested {}").unwrap();
     let members = cu.implicit_class.unwrap().members;
@@ -207,6 +221,29 @@ fn test_method_declaration() {
         }
         _ => panic!("expected class declaration"),
     }
+}
+
+#[test]
+fn test_method_span_includes_return_type() {
+    let src = "void main() {}";
+    let cu: CompilationUnit = parse_str(src).unwrap();
+    let ClassBodyDecl::Method(m) = &cu.implicit_class.unwrap().members[0] else {
+        panic!("expected method");
+    };
+    assert_eq!(m.span().source_text(src), "void main() {}");
+}
+
+#[test]
+fn test_primitive_return_type_span_excludes_enclosing_class() {
+    let src = "class Foo { int value() {} }";
+    let cu: CompilationUnit = parse_str(src).unwrap();
+    let TypeDecl::Class(cls) = &cu.type_decls[0] else {
+        panic!("expected class");
+    };
+    let ClassBodyDecl::Method(m) = &cls.body.declarations[0] else {
+        panic!("expected method");
+    };
+    assert_eq!(m.span().source_text(src), "int value() {}");
 }
 
 #[test]
