@@ -10,9 +10,14 @@ use crate::{
 };
 
 /// Saved parser state for speculative parsing with backtracking.
+///
+/// Restoring a state also rolls back the `>>`/`>>>` split tokens and any
+/// comments buffered while the speculative parse was running, so that a failed
+/// attempt leaves no trace behind.
 pub struct ParserState {
     cursor: usize,
-    pending_gts: u8,
+    pending_gt_spans: Vec<Span>,
+    pending_comments: Vec<Comment>,
 }
 
 /// The parsing cursor, similar to syn's `ParseBuffer`.
@@ -22,8 +27,9 @@ pub struct ParseStream<'a> {
     tokens: &'a [Token],
     cursor: Cell<usize>,
     errors: RefCell<Vec<Error>>,
-    /// Pending greater-than tokens from splitting >> or >>> for nested generics
-    pending_gts: Cell<u8>,
+    /// Spans of the `>` tokens still owed by splitting >> or >>> for nested
+    /// generics, innermost first
+    pending_gt_spans: RefCell<Vec<Span>>,
     /// Pre-allocated synthetic `>` token for >> / >>> splitting
     synthetic_gt: Token,
     /// Comments skipped by skip_comments(), available for collection
@@ -36,7 +42,7 @@ impl<'a> ParseStream<'a> {
             tokens,
             cursor: Cell::new(0),
             errors: RefCell::new(Vec::new()),
-            pending_gts: Cell::new(0),
+            pending_gt_spans: RefCell::new(Vec::new()),
             synthetic_gt: Token {
                 kind: TokenKind::Gt,
                 span: Span::new(0, 0),
@@ -61,7 +67,7 @@ impl<'a> ParseStream<'a> {
     /// Peek at the current token without consuming it.
     /// Comment tokens are skipped transparently.
     pub fn peek(&self) -> &Token {
-        if self.pending_gts.get() > 0 {
+        if !self.pending_gt_spans.borrow().is_empty() {
             return &self.synthetic_gt;
         }
         self.skip_comments();
@@ -85,25 +91,27 @@ impl<'a> ParseStream<'a> {
         self.cursor.set(pos);
     }
 
-    /// Save the full parser state (cursor + pending_gts) for speculative parsing.
+    /// Save the full parser state (cursor, split `>` tokens and pending
+    /// comments) for speculative parsing.
     pub fn save_state(&self) -> ParserState {
         ParserState {
             cursor: self.cursor.get(),
-            pending_gts: self.pending_gts.get(),
+            pending_gt_spans: self.pending_gt_spans.borrow().clone(),
+            pending_comments: self.pending_comments.borrow().clone(),
         }
     }
 
-    /// Restore the full parser state (cursor + pending_gts) after speculative parsing.
-    pub fn restore_state(&self, state: ParserState) {
+    /// Restore the full parser state after speculative parsing.
+    pub fn restore_state(&self, state: &ParserState) {
         self.cursor.set(state.cursor);
-        self.pending_gts.set(state.pending_gts);
+        *self.pending_gt_spans.borrow_mut() = state.pending_gt_spans.clone();
+        *self.pending_comments.borrow_mut() = state.pending_comments.clone();
     }
 
     /// Advance past the current token and return it.
     /// Comment tokens are skipped transparently.
     fn advance(&self) -> &Token {
-        if self.pending_gts.get() > 0 {
-            self.pending_gts.set(self.pending_gts.get() - 1);
+        if self.pending_gt_spans.borrow_mut().pop().is_some() {
             return &self.synthetic_gt;
         }
         let cursor = self.cursor.get();
@@ -122,21 +130,37 @@ impl<'a> ParseStream<'a> {
         err
     }
 
-    /// Split a >> token into two > tokens for nested generic parsing.
-    pub fn split_gt(&self) {
+    /// Split a `>>` (or `>>>`) token so that the current parse consumes the
+    /// first `>` and the enclosing parsers are handed the remaining ones, each
+    /// carrying the span of its own half of the token. Returns the span of the
+    /// `>` consumed here, or `None` if the current token is not `>>` / `>>>`.
+    pub fn split_gt(&self) -> Option<Span> {
         let cursor = self.cursor.get();
-        let kind = &self.tokens[cursor.min(self.tokens.len() - 1)].kind;
-        match kind {
-            TokenKind::GtGt => {
-                self.advance();
-                self.pending_gts.set(self.pending_gts.get() + 1);
-            }
-            TokenKind::GtGtGt => {
-                self.advance();
-                self.pending_gts.set(self.pending_gts.get() + 2);
-            }
-            _ => {}
+        let token = &self.tokens[cursor.min(self.tokens.len() - 1)];
+        let total = match token.kind {
+            TokenKind::GtGt => 2,
+            TokenKind::GtGtGt => 3,
+            _ => return None,
+        };
+        let start = token.span.start();
+        self.advance();
+        let mut pending = self.pending_gt_spans.borrow_mut();
+        for offset in (1..total).rev() {
+            pending.push(Span::new(start + offset, start + offset + 1));
         }
+        Some(Span::new(start, start + 1))
+    }
+
+    /// Consume the current `>` and return the span of that `>`. A `>` produced
+    /// by splitting `>>` / `>>>` reports the span of its own half.
+    pub fn eat_gt_span(&self) -> Option<Span> {
+        let span = match self.pending_gt_spans.borrow().last() {
+            Some(span) => *span,
+            None if self.is(&TokenKind::Gt) => self.peek().span,
+            None => return None,
+        };
+        self.advance();
+        Some(span)
     }
 
     /// Consume and return the current token regardless of its kind.
@@ -211,6 +235,21 @@ impl<'a> ParseStream<'a> {
         }
     }
 
+    /// If the current token matches the given kind, consume it and return the
+    /// span of the consumed token. Otherwise, report an error.
+    pub fn expect_span(&self, kind: TokenKind) -> Result<Span> {
+        let span = self.peek().span;
+        self.expect(kind)?;
+        Ok(span)
+    }
+
+    /// If the current token matches the given kind, consume it and return the
+    /// span of the consumed token.
+    pub fn eat_span(&self, kind: &TokenKind) -> Option<Span> {
+        let span = self.peek().span;
+        self.eat(kind).then_some(span)
+    }
+
     /// If the current token matches the given kind, consume it.
     /// Otherwise, report an error.
     pub fn expect(&self, kind: TokenKind) -> Result<()> {
@@ -281,16 +320,16 @@ impl<'a> ParseStream<'a> {
         Ok(items)
     }
 
-    /// Try to parse something. If parsing fails, revert the cursor.
+    /// Try to parse something. If parsing fails, revert the whole parser state.
     pub fn try_parse<T, F>(&self, f: F) -> Option<T>
     where
         F: FnOnce(&ParseStream) -> Result<T>,
     {
-        let saved = self.cursor.get();
+        let saved = self.save_state();
         match f(self) {
             Ok(t) => Some(t),
             Err(_) => {
-                self.cursor.set(saved);
+                self.restore_state(&saved);
                 None
             }
         }

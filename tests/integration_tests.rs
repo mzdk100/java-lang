@@ -1133,3 +1133,331 @@ fn test_comment_between_items_not_attached() {
     };
     assert_eq!(b.doc_comment.len(), 1);
 }
+
+#[test]
+fn test_declaration_spans_point_at_their_own_tokens() {
+    let src = "package com.example;\n\n\
+import java.util.List;\n\
+import java.util.*;\n\
+import static java.util.Collections.emptyList;\n\
+import static java.util.Arrays.*;\n\n\
+public class Outer implements Runnable {\n\
+    private int field = 1;\n\n\
+    Outer(int count, String... names) {\n\
+        super();\n\
+        this.field = count;\n\
+    }\n\n\
+    public void run() {\n\
+        int[] xs = new int[3];\n\
+        xs[0] = 1;\n\
+    }\n\
+}\n";
+    let cu: CompilationUnit = parse_str(src).unwrap();
+
+    let pkg = package(&cu).unwrap();
+    assert_eq!(pkg.package_span.source_text(src), "package");
+    assert_eq!(pkg.name.span.source_text(src), "com.example");
+    assert_eq!(pkg.semi_span.source_text(src), ";");
+    assert_eq!(pkg.span.source_text(src), "package com.example;");
+
+    let ImportDecl::SingleType {
+        import_span,
+        path,
+        semi_span,
+    } = &cu.imports[0]
+    else {
+        panic!("expected a single type import");
+    };
+    assert_eq!(import_span.source_text(src), "import");
+    assert_eq!(path.span.source_text(src), "java.util.List");
+    assert_eq!(semi_span.source_text(src), ";");
+
+    let ImportDecl::TypeOnDemand {
+        path,
+        star_span,
+        semi_span,
+        ..
+    } = &cu.imports[1]
+    else {
+        panic!("expected a type import on demand");
+    };
+    assert_eq!(path.span.source_text(src), "java.util");
+    assert_eq!(star_span.source_text(src), "*");
+    assert_eq!(semi_span.source_text(src), ";");
+
+    let ImportDecl::SingleStatic {
+        static_span,
+        path,
+        member,
+        semi_span,
+        ..
+    } = &cu.imports[2]
+    else {
+        panic!("expected a single static import");
+    };
+    assert_eq!(static_span.source_text(src), "static");
+    assert_eq!(
+        path.span.source_text(src),
+        "java.util.Collections.emptyList"
+    );
+    assert_eq!(member.span.source_text(src), "emptyList");
+    assert_eq!(semi_span.source_text(src), ";");
+
+    let ImportDecl::StaticOnDemand {
+        static_span,
+        path,
+        star_span,
+        semi_span,
+        ..
+    } = &cu.imports[3]
+    else {
+        panic!("expected a static import on demand");
+    };
+    assert_eq!(static_span.source_text(src), "static");
+    assert_eq!(path.span.source_text(src), "java.util.Arrays");
+    assert_eq!(star_span.source_text(src), "*");
+    assert_eq!(semi_span.source_text(src), ";");
+
+    let TypeDecl::Class(cls) = &type_decls(&cu)[0] else {
+        panic!("expected a class");
+    };
+    assert_eq!(cls.class_span.source_text(src), "class");
+    assert_eq!(cls.name.span.source_text(src), "Outer");
+    assert_eq!(
+        cls.implements_clause
+            .as_ref()
+            .unwrap()
+            .implements_span
+            .source_text(src),
+        "implements"
+    );
+    assert_eq!(cls.body.brace_span.0.source_text(src), "{");
+    assert_eq!(cls.body.brace_span.1.source_text(src), "}");
+
+    let ClassBodyDecl::Field(field) = &cls.body.declarations[0] else {
+        panic!("expected a field");
+    };
+    assert_eq!(field.modifiers[0].span().source_text(src), "private");
+    assert_eq!(field.ty.span().source_text(src), "int");
+    assert_eq!(
+        field.declarators[0]
+            .name
+            .as_ref()
+            .unwrap()
+            .span
+            .source_text(src),
+        "field"
+    );
+    assert_eq!(field.semi_span.source_text(src), ";");
+
+    let ClassBodyDecl::Constructor(ctor) = &cls.body.declarations[1] else {
+        panic!("expected a constructor");
+    };
+    assert_eq!(ctor.paren_span.0.source_text(src), "(");
+    assert_eq!(ctor.paren_span.1.source_text(src), ")");
+    assert_eq!(ctor.body.brace_span.0.source_text(src), "{");
+    assert_eq!(ctor.body.brace_span.1.source_text(src), "}");
+    let FormalParameter::VarArgs {
+        ellipsis_span,
+        name,
+        ..
+    } = &ctor.params[1]
+    else {
+        panic!("expected a varargs parameter");
+    };
+    assert_eq!(ellipsis_span.source_text(src), "...");
+    assert_eq!(name.as_ref().unwrap().span.source_text(src), "names");
+
+    let ClassBodyDecl::Method(m) = &cls.body.declarations[2] else {
+        panic!("expected a method");
+    };
+    assert_eq!(m.paren_span.0.source_text(src), "(");
+    assert_eq!(m.paren_span.1.source_text(src), ")");
+
+    let body = m.body.as_ref().unwrap();
+    assert_eq!(body.brace_span.0.source_text(src), "{");
+    assert_eq!(body.brace_span.1.source_text(src), "}");
+    let Stmt::LocalVarDecl(decl) = &body.stmts[0] else {
+        panic!("expected a local variable declaration");
+    };
+    assert_eq!(decl.semi_span.source_text(src), ";");
+    let Stmt::Expr(expr_stmt) = &body.stmts[1] else {
+        panic!("expected an expression statement");
+    };
+    assert_eq!(expr_stmt.semi_span.source_text(src), ";");
+}
+
+#[test]
+fn test_generic_and_delimiter_spans() {
+    let src = "@Deprecated\n\
+@SuppressWarnings(value = \"x\")\n\
+class G<T extends Number> {\n\
+    java.util.List<String> items;\n\n\
+    void m(java.util.Map<String, java.util.List<Integer>> map) {\n\
+        switch (1) {\n\
+            case 1: break;\n\
+            default: break;\n\
+        }\n\
+        try (AutoCloseable c = null) {\n\
+            int n = (int) 1L;\n\
+        } catch (Throwable t) {\n\
+        } finally {\n\
+        }\n\
+    }\n\
+}\n";
+    let cu: CompilationUnit = parse_str(src).unwrap();
+
+    let TypeDecl::Class(cls) = &type_decls(&cu)[0] else {
+        panic!("expected a class");
+    };
+
+    // @Deprecated is a marker; @SuppressWarnings(value = "x") is a normal annotation.
+    let Modifier::Annotation(Annotation::Marker { at_token, .. }) = &cls.modifiers[0] else {
+        panic!("expected a marker annotation");
+    };
+    assert_eq!(at_token.source_text(src), "@");
+    let Modifier::Annotation(Annotation::Normal {
+        paren_span, pairs, ..
+    }) = &cls.modifiers[1]
+    else {
+        panic!("expected a normal annotation");
+    };
+    assert_eq!(paren_span.0.source_text(src), "(");
+    assert_eq!(paren_span.1.source_text(src), ")");
+    assert_eq!(pairs[0].eq_span.source_text(src), "=");
+
+    let type_params = cls.type_params.as_ref().unwrap();
+    assert_eq!(type_params.lt_span.source_text(src), "<");
+    assert_eq!(type_params.gt_spans[0].source_text(src), ">");
+    assert_eq!(
+        type_params.params[0]
+            .bound
+            .as_ref()
+            .unwrap()
+            .extends_span
+            .source_text(src),
+        "extends"
+    );
+
+    // `java.util.List<String>`: the path span must cover the type arguments.
+    let ClassBodyDecl::Field(field) = &cls.body.declarations[0] else {
+        panic!("expected a field");
+    };
+    let Type::Reference(ReferenceType::ClassOrInterfaceType(list_ty)) = &field.ty else {
+        panic!("expected a class or interface type");
+    };
+    assert_eq!(list_ty.path.span.source_text(src), "java.util.List<String>");
+    let list_args = list_ty.path.segments.last().unwrap().args.as_ref().unwrap();
+    assert_eq!(list_args.lt_token.source_text(src), "<");
+    assert_eq!(list_args.gt_tokens[0].source_text(src), ">");
+
+    // `Map<String, List<Integer>>` closes with a `>>` that must be split into two
+    // separate `>` spans, one per level of nesting.
+    let ClassBodyDecl::Method(m) = &cls.body.declarations[1] else {
+        panic!("expected a method");
+    };
+    let FormalParameter::Normal { ty, .. } = &m.params[0] else {
+        panic!("expected a normal parameter");
+    };
+    let Type::Reference(ReferenceType::ClassOrInterfaceType(map_ty)) = ty else {
+        panic!("expected a class or interface type");
+    };
+    assert_eq!(
+        map_ty.path.span.source_text(src),
+        "java.util.Map<String, java.util.List<Integer>>"
+    );
+    let map_args = map_ty.path.segments.last().unwrap().args.as_ref().unwrap();
+    assert_eq!(map_args.gt_tokens.len(), 1);
+    assert_eq!(map_args.gt_tokens[0].source_text(src), ">");
+    let TypeArgument::Type(inner) = &map_args.args[1] else {
+        panic!("expected a type argument");
+    };
+    let Type::Reference(ReferenceType::ClassOrInterfaceType(inner_ty)) = inner.as_ref() else {
+        panic!("expected a class or interface type");
+    };
+    assert_eq!(
+        inner_ty.path.span.source_text(src),
+        "java.util.List<Integer>"
+    );
+    let inner_args = inner_ty
+        .path
+        .segments
+        .last()
+        .unwrap()
+        .args
+        .as_ref()
+        .unwrap();
+    assert_eq!(inner_args.gt_tokens[0].source_text(src), ">");
+    // The two `>` halves must be adjacent halves of the same `>>` token.
+    assert_eq!(
+        inner_args.gt_tokens[0].start() + 1,
+        map_args.gt_tokens[0].start()
+    );
+
+    let body = m.body.as_ref().unwrap();
+    let Stmt::Switch(switch_stmt) = &body.stmts[0] else {
+        panic!("expected a switch statement");
+    };
+    assert_eq!(switch_stmt.switch_span.source_text(src), "switch");
+    assert_eq!(switch_stmt.paren_span.0.source_text(src), "(");
+    assert_eq!(switch_stmt.paren_span.1.source_text(src), ")");
+    assert_eq!(switch_stmt.brace_span.0.source_text(src), "{");
+    assert_eq!(switch_stmt.brace_span.1.source_text(src), "}");
+    assert_eq!(switch_stmt.cases[0].colon_span.source_text(src), ":");
+
+    let Stmt::Try(try_stmt) = &body.stmts[1] else {
+        panic!("expected a try statement");
+    };
+    let TryStmt::TryWithResources {
+        paren_span,
+        block,
+        catches,
+        finally_block,
+        ..
+    } = try_stmt
+    else {
+        panic!("expected a try-with-resources statement");
+    };
+    assert_eq!(paren_span.0.source_text(src), "(");
+    assert_eq!(paren_span.1.source_text(src), ")");
+    assert_eq!(block.brace_span.0.source_text(src), "{");
+    assert_eq!(block.brace_span.1.source_text(src), "}");
+    assert_eq!(catches[0].paren_span.0.source_text(src), "(");
+    assert_eq!(catches[0].paren_span.1.source_text(src), ")");
+    assert_eq!(
+        finally_block.as_ref().unwrap().0.source_text(src),
+        "finally"
+    );
+
+    // `int n = (int) 1L;`: the cast keeps its own parentheses.
+    let Stmt::LocalVarDecl(decl) = &block.stmts[0] else {
+        panic!("expected a local variable declaration");
+    };
+    let Some(Expr::Cast(cast)) = decl.declarators[0].initializer.as_ref() else {
+        panic!("expected a cast expression");
+    };
+    assert_eq!(cast.paren_span.0.source_text(src), "(");
+    assert_eq!(cast.paren_span.1.source_text(src), ")");
+}
+
+#[test]
+fn test_failed_speculation_does_not_duplicate_comments() {
+    // `a /* c */ = 1;` first looks like a local variable declaration, so the
+    // parser speculatively parses a type and trips over the comment before it
+    // fails. Backtracking must roll that buffered comment back, otherwise the
+    // successful parse records it a second time.
+    let src = "class A { void m() { a /* c */ = 1; } }";
+    let comment_start = src.find("/* c */").unwrap();
+    let comment_span = format!(
+        "Span({}..{})",
+        comment_start,
+        comment_start + "/* c */".len()
+    );
+    let cu: CompilationUnit = parse_str(src).unwrap();
+    let debug = format!("{:#?}", cu);
+    assert_eq!(
+        debug.matches(&comment_span).count(),
+        1,
+        "the comment was recorded more than once"
+    );
+}

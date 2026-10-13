@@ -91,6 +91,17 @@ pub struct PathSegment {
     pub args: Option<TypeArguments>,
 }
 
+impl PathSegment {
+    /// Span of this segment, extended over the type arguments when present.
+    pub fn span(&self) -> Span {
+        let start = self.ident.span();
+        match &self.args {
+            Some(args) => args.gt_tokens.last().map_or(start, |gt| start.join(gt)),
+            None => start,
+        }
+    }
+}
+
 /// Type arguments: `<String, Integer>`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeArguments {

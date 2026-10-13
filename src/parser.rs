@@ -46,13 +46,13 @@ impl Parse for CompilationUnit {
             }
             if input.is(&TokenKind::At) || input.is(&TokenKind::Package) {
                 // Try parsing package declaration (possibly with annotations)
-                let saved = input.cursor();
+                let saved = input.save_state();
                 let pkg_result = input.try_parse(PackageDecl::parse);
                 if let Some(pkg) = pkg_result {
                     package = Some(pkg);
                     continue;
                 }
-                input.set_cursor(saved);
+                input.restore_state(&saved);
             }
             if input.is(&TokenKind::Import) {
                 if seen_member {
@@ -70,25 +70,25 @@ impl Parse for CompilationUnit {
                 || input.is(&TokenKind::Module)
                 || input.is(&TokenKind::Open)
             {
-                let saved = input.cursor();
+                let saved = input.save_state();
                 if let Some(mut mod_decl) = input.try_parse(ModuleDecl::parse) {
                     mod_decl.doc_comment = doc_comment;
                     module = Some(mod_decl);
                     seen_member = true;
                     continue;
                 }
-                input.set_cursor(saved);
+                input.restore_state(&saved);
             }
             if !is_compact_unit {
                 // Try an ordinary top-level type declaration first.
-                let saved = input.cursor();
+                let saved = input.save_state();
                 if let Some(mut type_decl) = input.try_parse(TypeDecl::parse) {
                     set_type_decl_doc_comment(&mut type_decl, doc_comment);
                     type_decls.push(type_decl);
                     seen_member = true;
                     continue;
                 }
-                input.set_cursor(saved);
+                input.restore_state(&saved);
             }
             // Compact compilation unit (JLS §7.3, §8.1.8): a top-level method, field,
             // or nested type with no enclosing class declaration. Constructors and
@@ -227,8 +227,7 @@ impl Parse for PackageDecl {
         let package_span = input.peek().span;
         input.expect(TokenKind::Package)?;
         let name = parse_path(input)?;
-        input.expect(TokenKind::Semicolon)?;
-        let semi_span = input.peek().span;
+        let semi_span = input.expect_span(TokenKind::Semicolon)?;
         Ok(Self {
             annotations,
             package_span,
@@ -249,13 +248,12 @@ impl Parse for ImportDecl {
         input.expect(TokenKind::Import)?;
 
         if input.is(&TokenKind::Module) {
-            let saved = input.cursor();
+            let saved = input.save_state();
             let module_span = input.peek().span;
             input.next();
             if input.is_any_ident() {
                 let name = parse_path(input)?;
-                input.expect(TokenKind::Semicolon)?;
-                let semi_span = input.peek().span;
+                let semi_span = input.expect_span(TokenKind::Semicolon)?;
                 return Ok(Self::Module {
                     import_span,
                     module_span,
@@ -263,22 +261,18 @@ impl Parse for ImportDecl {
                     semi_span,
                 });
             }
-            input.set_cursor(saved);
+            input.restore_state(&saved);
         }
 
-        let is_static = input.eat(&TokenKind::Static);
-        let static_span = if is_static {
-            Some(input.peek().span)
-        } else {
-            None
-        };
+        let static_span = input.eat_span(&TokenKind::Static);
+        let is_static = static_span.is_some();
 
         let path = parse_path(input)?;
 
-        if input.eat(&TokenKind::Dot) && input.eat(&TokenKind::Star) {
+        if input.eat(&TokenKind::Dot) && input.is(&TokenKind::Star) {
             let star_span = input.peek().span;
-            input.expect(TokenKind::Semicolon)?;
-            let semi_span = input.peek().span;
+            input.next();
+            let semi_span = input.expect_span(TokenKind::Semicolon)?;
             if is_static {
                 Ok(Self::StaticOnDemand {
                     import_span,
@@ -296,8 +290,7 @@ impl Parse for ImportDecl {
                 })
             }
         } else {
-            input.expect(TokenKind::Semicolon)?;
-            let semi_span = input.peek().span;
+            let semi_span = input.expect_span(TokenKind::Semicolon)?;
             if is_static {
                 let member = path.last_ident().clone();
                 Ok(Self::SingleStatic {
@@ -328,11 +321,7 @@ impl Parse for ModuleDecl {
         while input.is(&TokenKind::At) {
             annotations.push(input.parse::<Annotation>()?);
         }
-        let open_span = if input.eat(&TokenKind::Open) {
-            Some(input.peek().span)
-        } else {
-            None
-        };
+        let open_span = input.eat_span(&TokenKind::Open);
         let module_span = input.peek().span;
         if !input.is(&TokenKind::Module) {
             return Err(crate::error::Error::new(
@@ -342,14 +331,12 @@ impl Parse for ModuleDecl {
         }
         input.next();
         let name = parse_path(input)?;
-        input.expect(TokenKind::LBrace)?;
-        let brace_start = input.peek().span;
+        let brace_start = input.expect_span(TokenKind::LBrace)?;
         let mut directives = Vec::new();
         while !input.is(&TokenKind::RBrace) && !input.is_empty() {
             directives.push(parse_module_directive(input)?);
         }
-        input.expect(TokenKind::RBrace)?;
-        let brace_end = input.peek().span;
+        let brace_end = input.expect_span(TokenKind::RBrace)?;
         Ok(Self {
             doc_comment: Vec::new(),
             annotations,
@@ -377,8 +364,7 @@ fn parse_module_directive(input: &ParseStream) -> Result<ModuleDirective> {
                 modifiers.push(modifier);
             }
             let module = parse_path(input)?;
-            input.expect(TokenKind::Semicolon)?;
-            let semi_span = input.peek().span;
+            let semi_span = input.expect_span(TokenKind::Semicolon)?;
             Ok(ModuleDirective::Requires {
                 requires_span,
                 modifiers,
@@ -390,8 +376,7 @@ fn parse_module_directive(input: &ParseStream) -> Result<ModuleDirective> {
             input.next();
             let exports_span = span;
             let pkg = parse_path(input)?;
-            let to_modules = if input.eat(&TokenKind::To) {
-                let to_span = input.peek().span;
+            let to_modules = if let Some(to_span) = input.eat_span(&TokenKind::To) {
                 let mut mods = vec![parse_path(input)?];
                 while input.eat(&TokenKind::Comma) {
                     mods.push(parse_path(input)?);
@@ -400,8 +385,7 @@ fn parse_module_directive(input: &ParseStream) -> Result<ModuleDirective> {
             } else {
                 None
             };
-            input.expect(TokenKind::Semicolon)?;
-            let semi_span = input.peek().span;
+            let semi_span = input.expect_span(TokenKind::Semicolon)?;
             Ok(ModuleDirective::Exports {
                 exports_span,
                 pkg,
@@ -413,8 +397,7 @@ fn parse_module_directive(input: &ParseStream) -> Result<ModuleDirective> {
             input.next();
             let opens_span = span;
             let pkg = parse_path(input)?;
-            let to_modules = if input.eat(&TokenKind::To) {
-                let to_span = input.peek().span;
+            let to_modules = if let Some(to_span) = input.eat_span(&TokenKind::To) {
                 let mut mods = vec![parse_path(input)?];
                 while input.eat(&TokenKind::Comma) {
                     mods.push(parse_path(input)?);
@@ -423,8 +406,7 @@ fn parse_module_directive(input: &ParseStream) -> Result<ModuleDirective> {
             } else {
                 None
             };
-            input.expect(TokenKind::Semicolon)?;
-            let semi_span = input.peek().span;
+            let semi_span = input.expect_span(TokenKind::Semicolon)?;
             Ok(ModuleDirective::Opens {
                 opens_span,
                 pkg,
@@ -436,8 +418,7 @@ fn parse_module_directive(input: &ParseStream) -> Result<ModuleDirective> {
             input.next();
             let uses_span = span;
             let ty = parse_type(input)?;
-            input.expect(TokenKind::Semicolon)?;
-            let semi_span = input.peek().span;
+            let semi_span = input.expect_span(TokenKind::Semicolon)?;
             Ok(ModuleDirective::Uses {
                 uses_span,
                 ty,
@@ -448,14 +429,12 @@ fn parse_module_directive(input: &ParseStream) -> Result<ModuleDirective> {
             input.next();
             let provides_span = span;
             let ty = parse_type(input)?;
-            input.expect(TokenKind::With)?;
-            let with_span = input.peek().span;
+            let with_span = input.expect_span(TokenKind::With)?;
             let mut impls = vec![parse_type(input)?];
             while input.eat(&TokenKind::Comma) {
                 impls.push(parse_type(input)?);
             }
-            input.expect(TokenKind::Semicolon)?;
-            let semi_span = input.peek().span;
+            let semi_span = input.expect_span(TokenKind::Semicolon)?;
             Ok(ModuleDirective::Provides {
                 provides_span,
                 ty,
@@ -496,7 +475,7 @@ impl Parse for TypeDecl {
             }
             TokenKind::At => {
                 // Check for @interface (annotation type declaration)
-                let saved = input.cursor();
+                let saved = input.save_state();
                 let at_span = input.peek().span;
                 input.next(); // consume '@'
                 if input.is(&TokenKind::Interface) {
@@ -512,7 +491,7 @@ impl Parse for TypeDecl {
                         body,
                     }));
                 }
-                input.set_cursor(saved);
+                input.restore_state(&saved);
 
                 // Otherwise it's an annotation before a type declaration
                 let mut all_mods = modifiers.clone();
@@ -557,13 +536,13 @@ fn parse_annotations(input: &ParseStream) -> Result<Vec<Annotation>> {
     let mut anns = Vec::new();
     while input.is(&TokenKind::At) {
         // Stop before @interface (annotation type declaration)
-        let saved = input.cursor();
+        let saved = input.save_state();
         input.next(); // consume '@'
         if input.is(&TokenKind::Interface) {
-            input.set_cursor(saved);
+            input.restore_state(&saved);
             break;
         }
-        input.set_cursor(saved);
+        input.restore_state(&saved);
         anns.push(input.parse::<Annotation>()?);
     }
     Ok(anns)
@@ -607,13 +586,13 @@ fn parse_modifier(input: &ParseStream) -> Option<Modifier> {
         TokenKind::NonSealed => Modifier::NonSealed(input.next().span),
         TokenKind::Ident(s) if s == "non" => {
             // non-sealed is lexed as three tokens: Ident("non"), Minus, Sealed
-            let saved = input.cursor();
+            let saved = input.save_state();
             let non_span = input.next().span;
             if input.eat(&TokenKind::Minus) && input.is(&TokenKind::Sealed) {
                 let sealed_span = input.next().span;
                 Modifier::NonSealed(non_span.join(sealed_span))
             } else {
-                input.set_cursor(saved);
+                input.restore_state(&saved);
                 return None;
             }
         }
@@ -659,8 +638,8 @@ impl Parse for Annotation {
         let name = parse_annotation_path(input)?;
 
         if input.is(&TokenKind::LParen) {
-            input.next();
             let open = input.peek().span;
+            input.next();
 
             if input.is(&TokenKind::RParen) {
                 input.next();
@@ -670,12 +649,11 @@ impl Parse for Annotation {
             // Try to parse as Normal (key=value pairs)
             // Check if first thing is ident followed by '=' or ','
             if input.is_any_ident() {
-                let saved = input.cursor();
+                let saved = input.save_state();
                 let ident = input.parse_ident().ok();
                 if let Some(ident) = ident {
-                    if input.eat(&TokenKind::Eq) {
+                    if let Some(eq_span) = input.eat_span(&TokenKind::Eq) {
                         // Normal annotation
-                        let eq_span = input.peek().span;
                         let value = parse_element_value(input)?;
                         let mut pairs = vec![ElementValuePair {
                             key: ident,
@@ -684,8 +662,7 @@ impl Parse for Annotation {
                         }];
                         while input.eat(&TokenKind::Comma) {
                             let key = input.parse_ident()?;
-                            input.expect(TokenKind::Eq)?;
-                            let eq_span = input.peek().span;
+                            let eq_span = input.expect_span(TokenKind::Eq)?;
                             let value = parse_element_value(input)?;
                             pairs.push(ElementValuePair {
                                 key,
@@ -693,8 +670,7 @@ impl Parse for Annotation {
                                 value,
                             });
                         }
-                        input.expect(TokenKind::RParen)?;
-                        let close = input.peek().span;
+                        let close = input.expect_span(TokenKind::RParen)?;
                         return Ok(Self::Normal {
                             at_token,
                             name,
@@ -703,17 +679,18 @@ impl Parse for Annotation {
                         });
                     } else {
                         // It was just a value, backtrack
-                        input.set_cursor(saved);
+                        input.restore_state(&saved);
                     }
                 } else {
-                    input.set_cursor(saved);
+                    input.restore_state(&saved);
                 }
             }
 
-            // Single element annotation
+            // Single element annotation: there is no `=` token, so record an
+            // empty span at the end of the argument list.
             let value = parse_element_value(input)?;
-            input.expect(TokenKind::RParen)?;
-            let eq_token = input.peek().span;
+            let close = input.expect_span(TokenKind::RParen)?;
+            let eq_token = Span::new(close.end(), close.end());
             Ok(Self::SingleElement {
                 at_token,
                 name,
@@ -744,8 +721,7 @@ fn parse_element_value(input: &ParseStream) -> Result<ElementValue> {
                 break;
             }
         }
-        input.expect(TokenKind::RBrace)?;
-        let close = input.peek().span;
+        let close = input.expect_span(TokenKind::RBrace)?;
         Ok(ElementValue::Array {
             brace_span: (open, close),
             values,
@@ -758,8 +734,7 @@ fn parse_element_value(input: &ParseStream) -> Result<ElementValue> {
 }
 
 fn parse_implements_clause(input: &ParseStream) -> Option<ImplementsClause> {
-    if input.eat(&TokenKind::Implements) {
-        let implements_span = input.peek().span;
+    if let Some(implements_span) = input.eat_span(&TokenKind::Implements) {
         let supertypes = parse_type_list(input);
         Some(ImplementsClause {
             implements_span,
@@ -784,8 +759,7 @@ fn parse_array_init(input: &ParseStream) -> Result<ArrayInitExpr> {
             break;
         }
     }
-    input.expect(TokenKind::RBrace)?;
-    let close = input.peek().span;
+    let close = input.expect_span(TokenKind::RBrace)?;
     Ok(ArrayInitExpr {
         brace_span: (open, close),
         elements,
@@ -806,8 +780,7 @@ fn parse_class_decl(
     input.expect(TokenKind::Class)?;
     let name = input.parse_ident()?;
     let type_params = parse_optional_type_params(input);
-    let extends_clause = if input.eat(&TokenKind::Extends) {
-        let extends_span = input.peek().span;
+    let extends_clause = if let Some(extends_span) = input.eat_span(&TokenKind::Extends) {
         let supertype = parse_type(input)?;
         Some(ExtendsClause {
             extends_span,
@@ -817,8 +790,7 @@ fn parse_class_decl(
         None
     };
     let implements_clause = parse_implements_clause(input);
-    let permits_clause = if input.eat(&TokenKind::Permits) {
-        let permits_span = input.peek().span;
+    let permits_clause = if let Some(permits_span) = input.eat_span(&TokenKind::Permits) {
         let types = parse_type_list(input);
         Some(PermitsClause {
             permits_span,
@@ -842,8 +814,7 @@ fn parse_class_decl(
 }
 
 fn parse_class_body_decl_list(input: &ParseStream) -> Result<ClassBodyDeclList> {
-    input.expect(TokenKind::LBrace)?;
-    let open = input.peek().span;
+    let open = input.expect_span(TokenKind::LBrace)?;
     let mut declarations = Vec::new();
     while !input.is_empty() {
         if input.is(&TokenKind::RBrace) {
@@ -906,7 +877,7 @@ fn parse_class_body_decl(input: &ParseStream) -> Result<ClassBodyDecl> {
         }
         TokenKind::At => {
             // Could be nested @interface
-            let saved = input.cursor();
+            let saved = input.save_state();
             let at_span = input.peek().span;
             input.next(); // consume '@'
             if input.is(&TokenKind::Interface) {
@@ -922,7 +893,7 @@ fn parse_class_body_decl(input: &ParseStream) -> Result<ClassBodyDecl> {
                     body,
                 }))
             } else {
-                input.set_cursor(saved);
+                input.restore_state(&saved);
                 parse_class_member(input, doc_comment.clone(), modifiers)
             }
         }
@@ -951,9 +922,8 @@ fn parse_class_member(
                 ));
             }
         };
-        input.expect(TokenKind::LParen)?;
-        let open = input.peek().span;
-        let params = parse_formal_params_after_lparen(input)?;
+        let open = input.expect_span(TokenKind::LParen)?;
+        let (params, close) = parse_formal_params_after_lparen(input)?;
         let throws_clause = parse_throws_clause(input)?;
         let body = parse_constructor_body(input)?;
         return Ok(ClassBodyDecl::Constructor(ConstructorDecl {
@@ -963,7 +933,7 @@ fn parse_class_member(
             name,
             receiver_param: None,
             params,
-            paren_span: (open, input.peek().span),
+            paren_span: (open, close),
             throws_clause,
             body,
         }));
@@ -974,9 +944,8 @@ fn parse_class_member(
 
         if input.is(&TokenKind::LParen) {
             // Method
-            input.expect(TokenKind::LParen)?;
-            let open = input.peek().span;
-            let params = parse_formal_params_after_lparen(input)?;
+            let open = input.expect_span(TokenKind::LParen)?;
+            let (params, close) = parse_formal_params_after_lparen(input)?;
             // Handle C-style array dimensions after params (e.g., int foo()[])
             let _trailing_dims = parse_array_dims(input)?;
             let throws_clause = parse_throws_clause(input)?;
@@ -994,7 +963,7 @@ fn parse_class_member(
                 name,
                 receiver_param: None,
                 params,
-                paren_span: (open, input.peek().span),
+                paren_span: (open, close),
                 throws_clause,
                 body,
             }));
@@ -1027,8 +996,7 @@ fn parse_class_member(
                 initializer,
             });
         }
-        input.expect(TokenKind::Semicolon)?;
-        let semi_span = input.peek().span;
+        let semi_span = input.expect_span(TokenKind::Semicolon)?;
         return Ok(ClassBodyDecl::Field(FieldDecl {
             doc_comment,
             modifiers,
@@ -1044,7 +1012,7 @@ fn parse_class_member(
     ))
 }
 
-fn parse_formal_params_after_lparen(input: &ParseStream) -> Result<Vec<FormalParameter>> {
+fn parse_formal_params_after_lparen(input: &ParseStream) -> Result<(Vec<FormalParameter>, Span)> {
     let mut params = Vec::new();
     while !input.is(&TokenKind::RParen) && !input.is_empty() {
         let modifiers = parse_modifiers(input);
@@ -1087,8 +1055,7 @@ fn parse_formal_params_after_lparen(input: &ParseStream) -> Result<Vec<FormalPar
         };
 
         let trailing_annotations = parse_type_annotations(input);
-        if input.eat(&TokenKind::Ellipsis) {
-            let ellipsis_span = input.peek().span;
+        if let Some(ellipsis_span) = input.eat_span(&TokenKind::Ellipsis) {
             let name = input.parse_ident().ok();
             params.push(FormalParameter::VarArgs {
                 modifiers,
@@ -1108,13 +1075,12 @@ fn parse_formal_params_after_lparen(input: &ParseStream) -> Result<Vec<FormalPar
             break;
         }
     }
-    input.expect(TokenKind::RParen)?;
-    Ok(params)
+    let close = input.expect_span(TokenKind::RParen)?;
+    Ok((params, close))
 }
 
 fn parse_throws_clause(input: &ParseStream) -> Result<Option<ThrowsClause>> {
-    if input.eat(&TokenKind::Throws) {
-        let throws_span = input.peek().span;
+    if let Some(throws_span) = input.eat_span(&TokenKind::Throws) {
         let types = parse_type_list(input);
         Ok(Some(ThrowsClause { throws_span, types }))
     } else {
@@ -1135,8 +1101,7 @@ fn parse_interface_decl(
     input.expect(TokenKind::Interface)?;
     let name = input.parse_ident()?;
     let type_params = parse_optional_type_params(input);
-    let extends_clause = if input.eat(&TokenKind::Extends) {
-        let extends_span = input.peek().span;
+    let extends_clause = if let Some(extends_span) = input.eat_span(&TokenKind::Extends) {
         let supertypes = parse_type_list(input);
         Some(InterfaceExtendsClause {
             extends_span,
@@ -1145,8 +1110,7 @@ fn parse_interface_decl(
     } else {
         None
     };
-    let permits_clause = if input.eat(&TokenKind::Permits) {
-        let permits_span = input.peek().span;
+    let permits_clause = if let Some(permits_span) = input.eat_span(&TokenKind::Permits) {
         let types = parse_type_list(input);
         Some(PermitsClause {
             permits_span,
@@ -1158,8 +1122,7 @@ fn parse_interface_decl(
 
     // Check for @interface (annotation type)
     // body
-    input.expect(TokenKind::LBrace)?;
-    let open = input.peek().span;
+    let open = input.expect_span(TokenKind::LBrace)?;
     let mut members = Vec::new();
     while !input.is_empty() {
         if input.is(&TokenKind::RBrace) {
@@ -1172,8 +1135,7 @@ fn parse_interface_decl(
         }
         members.push(parse_interface_member_decl(input)?);
     }
-    input.expect(TokenKind::RBrace)?;
-    let close = input.peek().span;
+    let close = input.expect_span(TokenKind::RBrace)?;
 
     Ok(InterfaceDecl {
         doc_comment,
@@ -1213,7 +1175,7 @@ fn parse_interface_member_decl(input: &ParseStream) -> Result<InterfaceMemberDec
         }
         TokenKind::At => {
             // Could be nested @interface
-            let saved = input.cursor();
+            let saved = input.save_state();
             let at_span = input.peek().span;
             input.next(); // consume '@'
             if input.is(&TokenKind::Interface) {
@@ -1231,7 +1193,7 @@ fn parse_interface_member_decl(input: &ParseStream) -> Result<InterfaceMemberDec
                     },
                 ))
             } else {
-                input.set_cursor(saved);
+                input.restore_state(&saved);
                 parse_interface_field_or_method(input, doc_comment, modifiers)
             }
         }
@@ -1250,9 +1212,8 @@ fn parse_interface_field_or_method(
         let name = input.parse_ident()?;
         if input.is(&TokenKind::LParen) {
             // Method
-            input.expect(TokenKind::LParen)?;
-            let open = input.peek().span;
-            let params = parse_formal_params_after_lparen(input)?;
+            let open = input.expect_span(TokenKind::LParen)?;
+            let (params, close) = parse_formal_params_after_lparen(input)?;
             let throws_clause = parse_throws_clause(input)?;
             let body = if input.is(&TokenKind::LBrace) {
                 Some(parse_block(input, Vec::new())?)
@@ -1268,7 +1229,7 @@ fn parse_interface_field_or_method(
                 name,
                 receiver_param: None,
                 params,
-                paren_span: (open, input.peek().span),
+                paren_span: (open, close),
                 throws_clause,
                 body,
             }))
@@ -1300,8 +1261,7 @@ fn parse_interface_field_or_method(
                     initializer,
                 });
             }
-            input.expect(TokenKind::Semicolon)?;
-            let semi_span = input.peek().span;
+            let semi_span = input.expect_span(TokenKind::Semicolon)?;
             Ok(InterfaceMemberDecl::Field(FieldDecl {
                 doc_comment,
                 modifiers,
@@ -1332,8 +1292,7 @@ fn parse_enum_decl(
     let name = input.parse_ident()?;
     let implements_clause = parse_implements_clause(input);
 
-    input.expect(TokenKind::LBrace)?;
-    let open = input.peek().span;
+    let open = input.expect_span(TokenKind::LBrace)?;
     let mut constants = Vec::new();
     let mut comma_span = None;
 
@@ -1344,8 +1303,7 @@ fn parse_enum_decl(
             let open_p = input.peek().span;
             input.next();
             let args = input.parse_terminated(parse_expression)?;
-            input.expect(TokenKind::RParen)?;
-            let close_p = input.peek().span;
+            let close_p = input.expect_span(TokenKind::RParen)?;
             (Some((open_p, close_p)), args)
         } else {
             (None, Vec::new())
@@ -1362,8 +1320,8 @@ fn parse_enum_decl(
             args,
             body,
         });
-        if input.eat(&TokenKind::Comma) {
-            comma_span = Some(input.peek().span);
+        if let Some(span) = input.eat_span(&TokenKind::Comma) {
+            comma_span = Some(span);
         } else {
             break;
         }
@@ -1387,8 +1345,7 @@ fn parse_enum_decl(
         Vec::new()
     };
 
-    input.expect(TokenKind::RBrace)?;
-    let close = input.peek().span;
+    let close = input.expect_span(TokenKind::RBrace)?;
 
     Ok(EnumDecl {
         doc_comment,
@@ -1420,14 +1377,12 @@ fn parse_record_decl(
     let type_params = parse_optional_type_params(input);
 
     // Parse record components
-    input.expect(TokenKind::LParen)?;
-    let open_p = input.peek().span;
+    let open_p = input.expect_span(TokenKind::LParen)?;
     let mut components = Vec::new();
     while !input.is(&TokenKind::RParen) && !input.is_empty() {
         let annotations = parse_annotations(input)?;
         let ty = parse_type(input)?;
-        if input.eat(&TokenKind::Ellipsis) {
-            let ellipsis_span = input.peek().span;
+        if let Some(ellipsis_span) = input.eat_span(&TokenKind::Ellipsis) {
             let name = input.parse_ident()?;
             components.push(RecordComponent::VarArgs {
                 annotations,
@@ -1447,14 +1402,12 @@ fn parse_record_decl(
             break;
         }
     }
-    input.expect(TokenKind::RParen)?;
-    let close_p = input.peek().span;
+    let close_p = input.expect_span(TokenKind::RParen)?;
 
     let implements_clause = parse_implements_clause(input);
 
     // Record body
-    input.expect(TokenKind::LBrace)?;
-    let open = input.peek().span;
+    let open = input.expect_span(TokenKind::LBrace)?;
     let mut members = Vec::new();
     while !input.is_empty() {
         if input.is(&TokenKind::RBrace) {
@@ -1467,8 +1420,7 @@ fn parse_record_decl(
         }
         members.push(parse_record_body_decl(input)?);
     }
-    input.expect(TokenKind::RBrace)?;
-    let close = input.peek().span;
+    let close = input.expect_span(TokenKind::RBrace)?;
 
     Ok(RecordDecl {
         doc_comment,
@@ -1559,9 +1511,8 @@ fn parse_record_body_decl_with_mods(
     if input.is_any_ident() {
         let name = input.parse_ident()?;
         if input.is(&TokenKind::LParen) {
-            input.expect(TokenKind::LParen)?;
-            let open = input.peek().span;
-            let params = parse_formal_params_after_lparen(input)?;
+            let open = input.expect_span(TokenKind::LParen)?;
+            let (params, close) = parse_formal_params_after_lparen(input)?;
             let throws_clause = parse_throws_clause(input)?;
             let body = if input.is(&TokenKind::LBrace) {
                 Some(parse_block(input, Vec::new())?)
@@ -1577,7 +1528,7 @@ fn parse_record_body_decl_with_mods(
                 name,
                 receiver_param: None,
                 params,
-                paren_span: (open, input.peek().span),
+                paren_span: (open, close),
                 throws_clause,
                 body,
             }));
@@ -1608,8 +1559,7 @@ fn parse_record_body_decl_with_mods(
                 initializer,
             });
         }
-        input.expect(TokenKind::Semicolon)?;
-        let semi_span = input.peek().span;
+        let semi_span = input.expect_span(TokenKind::Semicolon)?;
         Ok(RecordBodyDecl::Field(FieldDecl {
             doc_comment,
             modifiers,
@@ -1621,9 +1571,8 @@ fn parse_record_body_decl_with_mods(
         // Constructor: the parsed "type" is actually the constructor name (e.g., record name)
         // Extract the name from the type path
         let name = extract_constructor_name_from_type(&ty)?;
-        input.expect(TokenKind::LParen)?;
-        let open = input.peek().span;
-        let params = parse_formal_params_after_lparen(input)?;
+        let open = input.expect_span(TokenKind::LParen)?;
+        let (params, close) = parse_formal_params_after_lparen(input)?;
         let throws_clause = parse_throws_clause(input)?;
         let body = parse_constructor_body(input)?;
         Ok(RecordBodyDecl::Constructor(ConstructorDecl {
@@ -1633,7 +1582,7 @@ fn parse_record_body_decl_with_mods(
             name,
             receiver_param: None,
             params,
-            paren_span: (open, input.peek().span),
+            paren_span: (open, close),
             throws_clause,
             body,
         }))
@@ -1667,18 +1616,17 @@ fn extract_constructor_name_from_type(ty: &Type) -> Result<Ident> {
 }
 
 fn parse_constructor_body(input: &ParseStream) -> Result<ConstructorBody> {
-    input.expect(TokenKind::LBrace)?;
-    let open = input.peek().span;
+    let open = input.expect_span(TokenKind::LBrace)?;
     let mut explicit_constructor_call = None;
     let mut stmts = Vec::new();
 
     {
-        let saved = input.cursor();
+        let saved = input.save_state();
         let call = input.try_parse(parse_explicit_constructor_call);
         if let Some(call) = call {
             explicit_constructor_call = Some(call);
         } else {
-            input.set_cursor(saved);
+            input.restore_state(&saved);
         }
     }
 
@@ -1688,8 +1636,7 @@ fn parse_constructor_body(input: &ParseStream) -> Result<ConstructorBody> {
         }
         stmts.push(parse_statement(input)?);
     }
-    input.expect(TokenKind::RBrace)?;
-    let close = input.peek().span;
+    let close = input.expect_span(TokenKind::RBrace)?;
     Ok(ConstructorBody {
         brace_span: (open, close),
         explicit_constructor_call,
@@ -1703,13 +1650,10 @@ fn parse_explicit_constructor_call(input: &ParseStream) -> Result<ExplicitConstr
         TokenKind::This => {
             let this_span = input.peek().span;
             input.next();
-            input.expect(TokenKind::LParen)?;
-            let open = input.peek().span;
+            let open = input.expect_span(TokenKind::LParen)?;
             let args = input.parse_terminated(parse_expression)?;
-            input.expect(TokenKind::RParen)?;
-            let close = input.peek().span;
-            input.expect(TokenKind::Semicolon)?;
-            let semi_span = input.peek().span;
+            let close = input.expect_span(TokenKind::RParen)?;
+            let semi_span = input.expect_span(TokenKind::Semicolon)?;
             Ok(ExplicitConstructorCall::This {
                 type_args,
                 this_span,
@@ -1721,13 +1665,10 @@ fn parse_explicit_constructor_call(input: &ParseStream) -> Result<ExplicitConstr
         TokenKind::Super => {
             let super_span = input.peek().span;
             input.next();
-            input.expect(TokenKind::LParen)?;
-            let open = input.peek().span;
+            let open = input.expect_span(TokenKind::LParen)?;
             let args = input.parse_terminated(parse_expression)?;
-            input.expect(TokenKind::RParen)?;
-            let close = input.peek().span;
-            input.expect(TokenKind::Semicolon)?;
-            let semi_span = input.peek().span;
+            let close = input.expect_span(TokenKind::RParen)?;
+            let semi_span = input.expect_span(TokenKind::Semicolon)?;
             Ok(ExplicitConstructorCall::Super {
                 type_args,
                 super_span,
@@ -1775,22 +1716,18 @@ fn parse_annotation_path(input: &ParseStream) -> Result<Path> {
     let mut segments = vec![PathSegment { ident, args: None }];
 
     while input.is(&TokenKind::Dot) {
-        let saved = input.cursor();
+        let saved = input.save_state();
         input.next();
         if input.is_any_ident() || is_contextual_type_keyword(&input.peek().kind) {
             let ident = input.parse_ident()?;
             segments.push(PathSegment { ident, args: None });
         } else {
-            input.set_cursor(saved);
+            input.restore_state(&saved);
             break;
         }
     }
 
-    let end = if input.cursor() > 0 {
-        input.look_ahead(0).span
-    } else {
-        start
-    };
+    let end = segments.last().map_or(start, |seg| seg.span());
 
     Ok(Path {
         segments,
@@ -1806,7 +1743,7 @@ fn parse_path(input: &ParseStream) -> Result<Path> {
 
     while input.is(&TokenKind::Dot) {
         // Speculative check: only consume the dot if followed by an identifier
-        let saved = input.cursor();
+        let saved = input.save_state();
         input.next(); // consume '.'
         // Consume any type-use annotations after . (e.g., OuterType.@Annotation InnerType)
         let _annotations = parse_type_annotations(input);
@@ -1815,16 +1752,12 @@ fn parse_path(input: &ParseStream) -> Result<Path> {
             let args = parse_optional_type_arguments(input);
             segments.push(PathSegment { ident, args });
         } else {
-            input.set_cursor(saved);
+            input.restore_state(&saved);
             break;
         }
     }
 
-    let end = if input.cursor() > 0 {
-        input.look_ahead(0).span
-    } else {
-        start
-    };
+    let end = segments.last().map_or(start, |seg| seg.span());
     Ok(Path {
         segments,
         span: start.join(end),
@@ -1885,13 +1818,13 @@ fn parse_type_annotations(input: &ParseStream) -> Vec<Annotation> {
     let mut anns = Vec::new();
     while input.is(&TokenKind::At) {
         // Stop before @interface
-        let saved = input.cursor();
+        let saved = input.save_state();
         input.next(); // consume '@'
         if input.is(&TokenKind::Interface) {
-            input.set_cursor(saved);
+            input.restore_state(&saved);
             break;
         }
-        input.set_cursor(saved);
+        input.restore_state(&saved);
         if let Some(ann) = input.try_parse(|i| i.parse::<Annotation>()) {
             anns.push(ann);
         } else {
@@ -1902,15 +1835,14 @@ fn parse_type_annotations(input: &ParseStream) -> Vec<Annotation> {
 }
 
 fn parse_annotation_type_body(input: &ParseStream) -> Result<AnnotationInterfaceBody> {
-    input.expect(TokenKind::LBrace)?;
-    let open = input.peek().span;
+    let open = input.expect_span(TokenKind::LBrace)?;
     let mut members = Vec::new();
     while !input.is_empty() {
         if input.is(&TokenKind::RBrace) {
             break;
         }
-        if input.eat(&TokenKind::Semicolon) {
-            members.push(AnnotationInterfaceMember::Empty(input.peek().span));
+        if let Some(span) = input.eat_span(&TokenKind::Semicolon) {
+            members.push(AnnotationInterfaceMember::Empty(span));
             continue;
         }
         let doc_comment = input.collect_pending_doc_comments();
@@ -1924,7 +1856,7 @@ fn parse_annotation_type_body(input: &ParseStream) -> Result<AnnotationInterface
 
         if input.is(&TokenKind::At) {
             // Nested @interface
-            let saved = input.cursor();
+            let saved = input.save_state();
             let at_span = input.peek().span;
             input.next();
             if input.is(&TokenKind::Interface) {
@@ -1943,7 +1875,7 @@ fn parse_annotation_type_body(input: &ParseStream) -> Result<AnnotationInterface
                 ));
                 continue;
             }
-            input.set_cursor(saved);
+            input.restore_state(&saved);
         }
 
         // Try class/interface/enum/record
@@ -1976,17 +1908,14 @@ fn parse_annotation_type_body(input: &ParseStream) -> Result<AnnotationInterface
             // Annotation element: Type name() [default value];
             let open_paren = input.peek().span;
             input.next();
-            input.expect(TokenKind::RParen)?;
-            let close_paren = input.peek().span;
-            let default_value = if input.eat(&TokenKind::Default) {
-                let eq_span = input.peek().span;
+            let close_paren = input.expect_span(TokenKind::RParen)?;
+            let default_value = if let Some(eq_span) = input.eat_span(&TokenKind::Default) {
                 let val = parse_element_value(input)?;
                 Some((eq_span, val))
             } else {
                 None
             };
-            input.expect(TokenKind::Semicolon)?;
-            let semi_span = input.peek().span;
+            let semi_span = input.expect_span(TokenKind::Semicolon)?;
             members.push(AnnotationInterfaceMember::Element(AnnotationElement {
                 modifiers: all_mods,
                 ty,
@@ -2023,8 +1952,7 @@ fn parse_annotation_type_body(input: &ParseStream) -> Result<AnnotationInterface
                     initializer,
                 });
             }
-            input.expect(TokenKind::Semicolon)?;
-            let semi_span = input.peek().span;
+            let semi_span = input.expect_span(TokenKind::Semicolon)?;
             members.push(AnnotationInterfaceMember::Field(FieldDecl {
                 doc_comment,
                 modifiers: all_mods,
@@ -2034,8 +1962,7 @@ fn parse_annotation_type_body(input: &ParseStream) -> Result<AnnotationInterface
             }));
         }
     }
-    input.expect(TokenKind::RBrace)?;
-    let close = input.peek().span;
+    let close = input.expect_span(TokenKind::RBrace)?;
     Ok(AnnotationInterfaceBody {
         brace_span: (open, close),
         members,
@@ -2082,18 +2009,17 @@ fn parse_array_dims(input: &ParseStream) -> Result<Vec<ArrayDim>> {
     loop {
         // Check for annotations before [ (JSR 308 type-use annotations on array dimensions)
         // We need to be careful: annotations before [ should only be consumed if [ follows.
-        let saved = input.cursor();
+        let saved = input.save_state();
         let _pre_annotations = parse_type_annotations(input);
         if !input.is(&TokenKind::LBracket) {
             // No bracket found - restore cursor to before annotations
-            input.set_cursor(saved);
+            input.restore_state(&saved);
             break;
         }
         let open = input.peek().span;
         input.next();
         let annotations = parse_type_annotations(input);
-        input.expect(TokenKind::RBracket)?;
-        let close = input.peek().span;
+        let close = input.expect_span(TokenKind::RBracket)?;
         dims.push(ArrayDim {
             bracket_span: (open, close),
             annotations,
@@ -2130,8 +2056,7 @@ fn parse_type_params(input: &ParseStream) -> Result<TypeParameters> {
     loop {
         let annotations = parse_annotations(input)?;
         let name = input.parse_ident()?;
-        let bound = if input.eat(&TokenKind::Extends) {
-            let extends_span = input.peek().span;
+        let bound = if let Some(extends_span) = input.eat_span(&TokenKind::Extends) {
             // Consume any type-use annotations before the bound type
             let _annotations = parse_type_annotations(input);
             let first = parse_path(input)?;
@@ -2169,20 +2094,10 @@ fn parse_type_params(input: &ParseStream) -> Result<TypeParameters> {
             bound,
             span,
         });
-        if input.eat(&TokenKind::Gt) {
-            gt_spans.push(input.peek().span);
-            break;
-        }
-        if input.is(&TokenKind::GtGt) {
-            // Split >> into one > for us and one > for the outer parser
-            input.split_gt();
-            gt_spans.push(input.peek().span);
-            break;
-        }
-        if input.is(&TokenKind::GtGtGt) {
-            // Split >>> into one > for us and two > for the outer parser
-            input.split_gt();
-            gt_spans.push(input.peek().span);
+        // A real `>` closes the list; a `>>` / `>>>` is split so that this parse
+        // takes the first `>` and the enclosing parsers are handed the rest.
+        if let Some(gt_span) = input.eat_gt_span().or_else(|| input.split_gt()) {
+            gt_spans.push(gt_span);
             break;
         }
         input.expect(TokenKind::Comma)?;
@@ -2206,8 +2121,8 @@ fn parse_type_arguments(input: &ParseStream) -> Result<TypeArguments> {
     let lt_span = input.peek().span;
     input.expect(TokenKind::Lt)?;
     // Handle diamond operator <>: empty type argument list
-    if input.eat(&TokenKind::Gt) {
-        let gt_spans = vec![input.peek().span];
+    if let Some(gt_span) = input.eat_gt_span() {
+        let gt_spans = vec![gt_span];
         return Ok(TypeArguments {
             args: vec![],
             lt_token: lt_span,
@@ -2217,10 +2132,9 @@ fn parse_type_arguments(input: &ParseStream) -> Result<TypeArguments> {
     let mut gt_spans = Vec::new();
     let mut args = Vec::new();
     loop {
-        let saved = input.cursor();
+        let saved = input.save_state();
         let annotations = parse_type_annotations(input);
-        if input.eat(&TokenKind::Question) {
-            let wildcard_span = input.peek().span;
+        if let Some(wildcard_span) = input.eat_span(&TokenKind::Question) {
             let bound = if input.eat(&TokenKind::Extends) {
                 Some(WildcardBound::Extends(Box::new(parse_type(input)?)))
             } else if input.eat(&TokenKind::Super) {
@@ -2234,23 +2148,13 @@ fn parse_type_arguments(input: &ParseStream) -> Result<TypeArguments> {
                 span: wildcard_span,
             }));
         } else {
-            input.set_cursor(saved);
+            input.restore_state(&saved);
             args.push(TypeArgument::Type(Box::new(parse_type(input)?)));
         }
-        if input.eat(&TokenKind::Gt) {
-            gt_spans.push(input.peek().span);
-            break;
-        }
-        if input.is(&TokenKind::GtGt) {
-            // Split >> into one > for us and one > for the outer parser
-            input.split_gt();
-            gt_spans.push(input.peek().span);
-            break;
-        }
-        if input.is(&TokenKind::GtGtGt) {
-            // Split >>> into one > for us and two > for the outer parser
-            input.split_gt();
-            gt_spans.push(input.peek().span);
+        // A real `>` closes the list; a `>>` / `>>>` is split so that this parse
+        // takes the first `>` and the enclosing parsers are handed the rest.
+        if let Some(gt_span) = input.eat_gt_span().or_else(|| input.split_gt()) {
+            gt_spans.push(gt_span);
             break;
         }
         input.expect(TokenKind::Comma)?;
@@ -2344,7 +2248,7 @@ fn parse_statement_with_comments(
 
     // Check for labeled statement: Ident ':'
     if input.is_any_ident() {
-        let saved = input.cursor();
+        let saved = input.save_state();
         let ident = input.parse_ident().ok();
         if let Some(ident) = ident {
             if input.is(&TokenKind::Colon) {
@@ -2358,9 +2262,9 @@ fn parse_statement_with_comments(
                     stmt: Box::new(stmt),
                 }));
             }
-            input.set_cursor(saved);
+            input.restore_state(&saved);
         } else {
-            input.set_cursor(saved);
+            input.restore_state(&saved);
         }
     }
 
@@ -2373,7 +2277,7 @@ fn parse_statement_with_comments(
         || input.is(&TokenKind::At)
         || is_modifier_keyword(&input.peek().kind)
     {
-        let saved = input.cursor();
+        let saved = input.save_state();
         match input.try_parse(|i| {
             // Only parse as local class if modifiers + keyword + ident pattern
             // e.g. "class Foo" or "abstract class Foo" but not "record.method()"
@@ -2388,23 +2292,22 @@ fn parse_statement_with_comments(
         }) {
             Some(decl) => return Ok(Stmt::ClassDecl(Box::new(decl))),
             None => {
-                input.set_cursor(saved);
+                input.restore_state(&saved);
             }
         }
     }
 
     // Check for local variable declaration or expression statement
     // Local var decl starts with type, possibly with var
-    let saved = input.cursor();
+    let saved = input.save_state();
     if let Some(stmt) = try_parse_local_var_decl_or_expr_stmt(input, leading_comments.clone()) {
         return Ok(stmt);
     }
-    input.set_cursor(saved);
+    input.restore_state(&saved);
 
     // Expression statement
     let expr = parse_expression(input)?;
-    input.expect(TokenKind::Semicolon)?;
-    let semi_span = input.peek().span;
+    let semi_span = input.expect_span(TokenKind::Semicolon)?;
     Ok(Stmt::Expr(ExprStmt {
         leading_comments,
         expr,
@@ -2421,7 +2324,7 @@ fn try_parse_local_var_decl_or_expr_stmt(
     let can_start_type = crate::token::can_start_type(&input.peek().kind);
 
     if is_var || can_start_type {
-        let saved = input.cursor();
+        let saved = input.save_state();
         let ty_result = if is_var {
             let var_span = input.peek().span;
             input.next();
@@ -2459,8 +2362,7 @@ fn try_parse_local_var_decl_or_expr_stmt(
                         initializer: init,
                     });
                 }
-                if input.eat(&TokenKind::Semicolon) {
-                    let semi_span = input.peek().span;
+                if let Some(semi_span) = input.eat_span(&TokenKind::Semicolon) {
                     return Some(Stmt::LocalVarDecl(LocalVarDeclStmt {
                         leading_comments,
                         modifiers,
@@ -2471,7 +2373,7 @@ fn try_parse_local_var_decl_or_expr_stmt(
                 }
             }
         }
-        input.set_cursor(saved);
+        input.restore_state(&saved);
     }
     None
 }
@@ -2479,14 +2381,11 @@ fn try_parse_local_var_decl_or_expr_stmt(
 fn parse_if_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let if_span = input.peek().span;
     input.expect(TokenKind::If)?;
-    input.expect(TokenKind::LParen)?;
-    let open = input.peek().span;
+    let open = input.expect_span(TokenKind::LParen)?;
     let cond = parse_expression(input)?;
-    input.expect(TokenKind::RParen)?;
-    let close = input.peek().span;
+    let close = input.expect_span(TokenKind::RParen)?;
     let then_stmt = parse_statement(input)?;
-    let else_clause = if input.eat(&TokenKind::Else) {
-        let else_span = input.peek().span;
+    let else_clause = if let Some(else_span) = input.eat_span(&TokenKind::Else) {
         let else_stmt = parse_statement(input)?;
         Some((else_span, Box::new(else_stmt)))
     } else {
@@ -2506,15 +2405,13 @@ fn parse_assert_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Res
     let assert_span = input.peek().span;
     input.expect(TokenKind::Assert)?;
     let cond = parse_expression(input)?;
-    let detail = if input.eat(&TokenKind::Colon) {
-        let colon_span = input.peek().span;
+    let detail = if let Some(colon_span) = input.eat_span(&TokenKind::Colon) {
         let detail = parse_expression(input)?;
         Some((colon_span, detail))
     } else {
         None
     };
-    input.expect(TokenKind::Semicolon)?;
-    let semi_span = input.peek().span;
+    let semi_span = input.expect_span(TokenKind::Semicolon)?;
     Ok(Stmt::Assert(AssertStmt {
         leading_comments,
         assert_span,
@@ -2527,21 +2424,21 @@ fn parse_assert_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Res
 fn parse_switch_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let switch_span = input.peek().span;
     input.expect(TokenKind::Switch)?;
-    input.expect(TokenKind::LParen)?;
-    let open = input.peek().span;
+    let open = input.expect_span(TokenKind::LParen)?;
     let selector = parse_expression(input)?;
-    input.expect(TokenKind::RParen)?;
-    let close = input.peek().span;
-    input.expect(TokenKind::LBrace)?;
-    let brace_open = input.peek().span;
+    let close = input.expect_span(TokenKind::RParen)?;
+    let brace_open = input.expect_span(TokenKind::LBrace)?;
     let mut cases = Vec::new();
     while !input.is_empty() {
         if input.is(&TokenKind::RBrace) {
             break;
         }
         let labels = parse_switch_labels(input)?;
-        let colon_span = if input.eat(&TokenKind::Colon) || input.eat(&TokenKind::Arrow) {
-            input.peek().span
+        let colon_span = if let Some(span) = input
+            .eat_span(&TokenKind::Colon)
+            .or_else(|| input.eat_span(&TokenKind::Arrow))
+        {
+            span
         } else {
             break;
         };
@@ -2558,8 +2455,7 @@ fn parse_switch_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Res
             stmts,
         });
     }
-    input.expect(TokenKind::RBrace)?;
-    let brace_close = input.peek().span;
+    let brace_close = input.expect_span(TokenKind::RBrace)?;
     Ok(Stmt::Switch(SwitchStmt {
         leading_comments,
         switch_span,
@@ -2645,7 +2541,7 @@ fn parse_case_value(input: &ParseStream) -> Result<Expr> {
             // Parse as cast: (type) IDENTIFIER, leaving `->` for the switch parser.
             let open_span = input.peek().span;
             input.next(); // consume `(`
-            let saved = input.cursor();
+            let saved = input.save_state();
             if let Ok(ty) = parse_type(input)
                 && input.eat(&TokenKind::RParen)
             {
@@ -2657,7 +2553,7 @@ fn parse_case_value(input: &ParseStream) -> Result<Expr> {
                     expr: Box::new(Expr::Ident(ident)),
                 }));
             }
-            input.set_cursor(saved);
+            input.restore_state(&saved);
             // If the targeted parse failed, fall through to general expression parsing
         }
 
@@ -2669,8 +2565,7 @@ fn parse_case_value(input: &ParseStream) -> Result<Expr> {
             let open_span = input.peek().span;
             input.next(); // consume `(`
             let inner = parse_expression(input)?;
-            input.expect(TokenKind::RParen)?;
-            let close_span = input.peek().span;
+            let close_span = input.expect_span(TokenKind::RParen)?;
             return Ok(Expr::Paren {
                 paren_span: (open_span, close_span),
                 expr: Box::new(inner),
@@ -2786,11 +2681,9 @@ fn is_case_pattern(input: &ParseStream) -> bool {
 fn parse_while_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let while_span = input.peek().span;
     input.expect(TokenKind::While)?;
-    input.expect(TokenKind::LParen)?;
-    let open = input.peek().span;
+    let open = input.expect_span(TokenKind::LParen)?;
     let cond = parse_expression(input)?;
-    input.expect(TokenKind::RParen)?;
-    let close = input.peek().span;
+    let close = input.expect_span(TokenKind::RParen)?;
     let body = parse_statement(input)?;
     Ok(Stmt::While(WhileStmt {
         leading_comments,
@@ -2807,13 +2700,10 @@ fn parse_do_while_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> R
     let body = parse_statement(input)?;
     let while_span = input.peek().span;
     input.expect(TokenKind::While)?;
-    input.expect(TokenKind::LParen)?;
-    let open = input.peek().span;
+    let open = input.expect_span(TokenKind::LParen)?;
     let cond = parse_expression(input)?;
-    input.expect(TokenKind::RParen)?;
-    let close = input.peek().span;
-    input.expect(TokenKind::Semicolon)?;
-    let semi_span = input.peek().span;
+    let close = input.expect_span(TokenKind::RParen)?;
+    let semi_span = input.expect_span(TokenKind::Semicolon)?;
     Ok(Stmt::DoWhile(DoWhileStmt {
         leading_comments,
         do_span,
@@ -2828,18 +2718,17 @@ fn parse_do_while_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> R
 fn parse_for_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let for_span = input.peek().span;
     input.expect(TokenKind::For)?;
-    input.expect(TokenKind::LParen)?;
-    let open = input.peek().span;
+    let open = input.expect_span(TokenKind::LParen)?;
 
     // Check for enhanced for: Type ident : expr
     // Or regular for: init; cond; update
-    let saved = input.cursor();
+    let saved = input.save_state();
 
     // Try enhanced for
     if let Some(stmt) = try_parse_enhanced_for(for_span, open, input, leading_comments.clone()) {
         return Ok(stmt);
     }
-    input.set_cursor(saved);
+    input.restore_state(&saved);
 
     // Regular for
     let init = if input.is(&TokenKind::Semicolon) {
@@ -2847,11 +2736,11 @@ fn parse_for_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result
         ForInit::Exprs(Vec::new())
     } else {
         // Could be local var decl or expression list
-        let inner_saved = input.cursor();
+        let inner_saved = input.save_state();
         if let Some(var_decl) = try_parse_local_var_decl(input) {
             ForInit::LocalVarDecl(var_decl)
         } else {
-            input.set_cursor(inner_saved);
+            input.restore_state(&inner_saved);
             let mut exprs = Vec::new();
             exprs.push(parse_expression(input)?);
             while input.eat(&TokenKind::Comma) {
@@ -2878,8 +2767,7 @@ fn parse_for_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result
         update.push(parse_expression(input)?);
         input.eat(&TokenKind::Comma);
     }
-    input.expect(TokenKind::RParen)?;
-    let close = input.peek().span;
+    let close = input.expect_span(TokenKind::RParen)?;
     let body = parse_statement(input)?;
 
     Ok(Stmt::For(ForStmt {
@@ -2900,7 +2788,7 @@ fn try_parse_local_var_decl(input: &ParseStream) -> Option<LocalVarDeclStmt> {
     let can_start = crate::token::can_start_type(&input.peek().kind);
 
     if is_var || can_start {
-        let saved = input.cursor();
+        let saved = input.save_state();
         let ty_result = if is_var {
             let var_span = input.peek().span;
             input.next();
@@ -2938,8 +2826,7 @@ fn try_parse_local_var_decl(input: &ParseStream) -> Option<LocalVarDeclStmt> {
                     initializer: init,
                 });
             }
-            if input.eat(&TokenKind::Semicolon) {
-                let semi_span = input.peek().span;
+            if let Some(semi_span) = input.eat_span(&TokenKind::Semicolon) {
                 return Some(LocalVarDeclStmt {
                     leading_comments: Vec::new(),
                     modifiers,
@@ -2949,7 +2836,7 @@ fn try_parse_local_var_decl(input: &ParseStream) -> Option<LocalVarDeclStmt> {
                 });
             }
         }
-        input.set_cursor(saved);
+        input.restore_state(&saved);
     }
     None
 }
@@ -2969,7 +2856,7 @@ fn try_parse_enhanced_for(
         return None;
     }
 
-    let saved = input.cursor();
+    let saved = input.save_state();
     let ty_result = if is_var {
         let var_span = input.peek().span;
         input.next();
@@ -2983,11 +2870,9 @@ fn try_parse_enhanced_for(
     {
         let name = input.parse_ident().ok()?;
         let dims = parse_array_dims(input).ok().unwrap_or_default();
-        if input.eat(&TokenKind::Colon) {
-            let colon_span = input.peek().span;
+        if let Some(colon_span) = input.eat_span(&TokenKind::Colon) {
             let iterable = parse_expression(input).ok()?;
-            input.expect(TokenKind::RParen).ok()?;
-            let close = input.peek().span;
+            let close = input.expect_span(TokenKind::RParen).ok()?;
             let body = parse_statement(input).ok()?;
             return Some(Stmt::EnhancedFor(EnhancedForStmt {
                 leading_comments,
@@ -3010,7 +2895,7 @@ fn try_parse_enhanced_for(
             }));
         }
     }
-    input.set_cursor(saved);
+    input.restore_state(&saved);
     None
 }
 
@@ -3023,19 +2908,18 @@ fn parse_jump_stmt(
     let keyword_span = input.peek().span;
     input.expect(keyword)?;
     let label = if input.is_any_ident() && !input.is(&TokenKind::Semicolon) {
-        let saved = input.cursor();
+        let saved = input.save_state();
         let ident = input.parse_ident().ok();
         if ident.is_some() && (input.is(&TokenKind::Semicolon) || input.is_empty()) {
             ident
         } else {
-            input.set_cursor(saved);
+            input.restore_state(&saved);
             None
         }
     } else {
         None
     };
-    input.expect(TokenKind::Semicolon)?;
-    let semi_span = input.peek().span;
+    let semi_span = input.expect_span(TokenKind::Semicolon)?;
     Ok(make_stmt(JumpStmt {
         leading_comments,
         keyword_span,
@@ -3052,8 +2936,7 @@ fn parse_return_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Res
     } else {
         Some(parse_expression(input)?)
     };
-    input.expect(TokenKind::Semicolon)?;
-    let semi_span = input.peek().span;
+    let semi_span = input.expect_span(TokenKind::Semicolon)?;
     Ok(Stmt::Return(ReturnStmt {
         leading_comments,
         return_span,
@@ -3066,8 +2949,7 @@ fn parse_throw_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Resu
     let throw_span = input.peek().span;
     input.expect(TokenKind::Throw)?;
     let expr = parse_expression(input)?;
-    input.expect(TokenKind::Semicolon)?;
-    let semi_span = input.peek().span;
+    let semi_span = input.expect_span(TokenKind::Semicolon)?;
     Ok(Stmt::Throw(ThrowStmt {
         leading_comments,
         throw_span,
@@ -3079,11 +2961,9 @@ fn parse_throw_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Resu
 fn parse_synchronized_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result<Stmt> {
     let synchronized_span = input.peek().span;
     input.expect(TokenKind::Synchronized)?;
-    input.expect(TokenKind::LParen)?;
-    let open = input.peek().span;
+    let open = input.expect_span(TokenKind::LParen)?;
     let lock = parse_expression(input)?;
-    input.expect(TokenKind::RParen)?;
-    let close = input.peek().span;
+    let close = input.expect_span(TokenKind::RParen)?;
     let body = parse_block(input, Vec::new())?;
     Ok(Stmt::Synchronized(SynchronizedStmt {
         leading_comments,
@@ -3100,11 +2980,10 @@ fn parse_try_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result
 
     if input.is(&TokenKind::LParen) {
         // Try-with-resources
-        input.expect(TokenKind::LParen)?;
-        let open = input.peek().span;
+        let open = input.expect_span(TokenKind::LParen)?;
         let mut resources = Vec::new();
         loop {
-            let saved = input.cursor();
+            let saved = input.save_state();
             // Try parsing as a local var decl (without requiring semicolon)
             let modifiers = parse_modifiers(input);
             let is_var = input.is(&TokenKind::Var);
@@ -3148,7 +3027,7 @@ fn parse_try_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result
                     continue;
                 }
             }
-            input.set_cursor(saved);
+            input.restore_state(&saved);
             let ident = input.parse_ident()?;
             resources.push(TryResource::VarRef(ident));
             if !input.eat(&TokenKind::Semicolon) {
@@ -3158,8 +3037,7 @@ fn parse_try_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result
                 break;
             }
         }
-        input.expect(TokenKind::RParen)?;
-        let close = input.peek().span;
+        let close = input.expect_span(TokenKind::RParen)?;
         let block = parse_block(input, Vec::new())?;
         let catches = parse_catch_clauses(input)?;
         let finally_block = parse_finally_clause(input);
@@ -3191,8 +3069,10 @@ fn parse_catch_clauses(input: &ParseStream) -> Result<Vec<CatchClause>> {
     while input.is(&TokenKind::Catch) {
         let catch_span = input.peek().span;
         input.next();
-        input.expect(TokenKind::LParen).ok();
-        let open = input.peek().span;
+        let open = input
+            .expect_span(TokenKind::LParen)
+            .ok()
+            .unwrap_or_default();
         let modifiers = parse_modifiers(input);
         let mut types = Vec::new();
         types.push(parse_type(input)?);
@@ -3200,8 +3080,10 @@ fn parse_catch_clauses(input: &ParseStream) -> Result<Vec<CatchClause>> {
             types.push(parse_type(input)?);
         }
         let name = input.parse_ident()?;
-        input.expect(TokenKind::RParen).ok();
-        let close = input.peek().span;
+        let close = input
+            .expect_span(TokenKind::RParen)
+            .ok()
+            .unwrap_or_default();
         let block = parse_block(input, Vec::new())?;
         clauses.push(CatchClause {
             catch_span,
@@ -3218,8 +3100,7 @@ fn parse_catch_clauses(input: &ParseStream) -> Result<Vec<CatchClause>> {
 }
 
 fn parse_finally_clause(input: &ParseStream) -> Option<(Span, Block)> {
-    if input.eat(&TokenKind::Finally) {
-        let finally_span = input.peek().span;
+    if let Some(finally_span) = input.eat_span(&TokenKind::Finally) {
         let block = parse_block(input, Vec::new()).ok()?;
         Some((finally_span, block))
     } else {
@@ -3231,8 +3112,7 @@ fn parse_yield_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Resu
     let yield_span = input.peek().span;
     input.expect(TokenKind::Yield)?;
     let value = parse_expression(input)?;
-    input.expect(TokenKind::Semicolon)?;
-    let semi_span = input.peek().span;
+    let semi_span = input.expect_span(TokenKind::Semicolon)?;
     Ok(Stmt::Yield(YieldStmt {
         leading_comments,
         yield_span,
@@ -3324,11 +3204,9 @@ fn expr_to_assign_target(expr: Expr) -> Result<AssignTarget> {
 
 fn parse_conditional_expr(input: &ParseStream) -> Result<Expr> {
     let expr = parse_binary_expr(input, 0)?;
-    if input.eat(&TokenKind::Question) {
-        let question_span = input.peek().span;
+    if let Some(question_span) = input.eat_span(&TokenKind::Question) {
         let then_expr = parse_expression(input)?;
-        input.expect(TokenKind::Colon)?;
-        let colon_span = input.peek().span;
+        let colon_span = input.expect_span(TokenKind::Colon)?;
         let else_expr = parse_conditional_expr(input)?;
         return Ok(Expr::Conditional(ConditionalExpr {
             cond: Box::new(expr),
@@ -3414,8 +3292,7 @@ fn parse_binary_expr(input: &ParseStream, min_prec: u8) -> Result<Expr> {
                     components.push(parse_pattern(input)?);
                     input.eat(&TokenKind::Comma);
                 }
-                input.expect(TokenKind::RParen)?;
-                let end = input.peek().span;
+                let end = input.expect_span(TokenKind::RParen)?;
                 left = Expr::Instanceof(InstanceofExpr {
                     expr: Box::new(left),
                     instanceof_span,
@@ -3569,7 +3446,7 @@ fn peek_dot_super_call(input: &ParseStream) -> bool {
     let _ = parse_optional_type_arguments(input);
     let matched =
         input.is(&TokenKind::Super) && matches!(input.look_ahead(1).kind, TokenKind::LParen);
-    input.restore_state(state);
+    input.restore_state(&state);
     matched
 }
 
@@ -3585,7 +3462,7 @@ fn parse_postfix_expr_impl(input: &ParseStream, stop_before_super_call: bool) ->
                 return Ok(Expr::MethodRef(parse_method_ref_tail(input, c.path)?));
             }
         }
-        input.restore_state(saved);
+        input.restore_state(&saved);
     }
 
     let mut expr = parse_primary_expr(input)?;
@@ -3604,11 +3481,9 @@ fn parse_postfix_expr_impl(input: &ParseStream, stop_before_super_call: bool) ->
                     input.next();
                     let type_args = parse_optional_type_arguments(input);
                     let class_type = parse_path(input)?;
-                    input.expect(TokenKind::LParen)?;
-                    let open = input.peek().span;
+                    let open = input.expect_span(TokenKind::LParen)?;
                     let args = input.parse_terminated(parse_expression)?;
-                    input.expect(TokenKind::RParen)?;
-                    let close = input.peek().span;
+                    let close = input.expect_span(TokenKind::RParen)?;
                     let body = if input.is(&TokenKind::LBrace) {
                         let dl = parse_class_body_decl_list(input)?;
                         Some(dl)
@@ -3678,11 +3553,9 @@ fn parse_postfix_expr_impl(input: &ParseStream, stop_before_super_call: bool) ->
                     // Explicit type arguments: obj.<Type>method(args)
                     let type_args = parse_type_arguments(input)?;
                     let method = input.parse_ident()?;
-                    input.expect(TokenKind::LParen)?;
-                    let open = input.peek().span;
+                    let open = input.expect_span(TokenKind::LParen)?;
                     let args = input.parse_terminated(parse_expression)?;
-                    input.expect(TokenKind::RParen)?;
-                    let close = input.peek().span;
+                    let close = input.expect_span(TokenKind::RParen)?;
                     expr = Expr::MethodCall(MethodCallExpr {
                         receiver: Some(Box::new(expr)),
                         type_args: Some(type_args),
@@ -3710,8 +3583,7 @@ fn parse_postfix_expr_impl(input: &ParseStream, stop_before_super_call: bool) ->
                 let open = input.peek().span;
                 input.next();
                 let args = input.parse_terminated(parse_expression)?;
-                input.expect(TokenKind::RParen)?;
-                let close = input.peek().span;
+                let close = input.expect_span(TokenKind::RParen)?;
 
                 // Check if this was actually a cast: (Type) expr
                 // Cast is handled in primary, so this is always a method call
@@ -3741,8 +3613,8 @@ fn parse_postfix_expr_impl(input: &ParseStream, stop_before_super_call: bool) ->
                 // Check for empty brackets `[]` — could be array type suffix
                 // before `.class` or `::` (e.g., `float[].class`, `String[]::new`)
                 if input.is(&TokenKind::RBracket) {
-                    input.next();
                     let close = input.peek().span;
+                    input.next();
                     // Collect more `[]` pairs
                     let mut dims = vec![crate::ast::ArrayDim {
                         bracket_span: (open, close),
@@ -3751,8 +3623,7 @@ fn parse_postfix_expr_impl(input: &ParseStream, stop_before_super_call: bool) ->
                     while input.is(&TokenKind::LBracket) {
                         let d_open = input.peek().span;
                         input.next();
-                        input.expect(TokenKind::RBracket)?;
-                        let d_close = input.peek().span;
+                        let d_close = input.expect_span(TokenKind::RBracket)?;
                         dims.push(crate::ast::ArrayDim {
                             bracket_span: (d_open, d_close),
                             annotations: vec![],
@@ -3795,8 +3666,7 @@ fn parse_postfix_expr_impl(input: &ParseStream, stop_before_super_call: bool) ->
                     }
                 } else {
                     let index = parse_expression(input)?;
-                    input.expect(TokenKind::RBracket)?;
-                    let close = input.peek().span;
+                    let close = input.expect_span(TokenKind::RBracket)?;
                     expr = Expr::ArrayAccess(ArrayAccessExpr {
                         array: Box::new(expr),
                         index: Box::new(index),
@@ -3993,7 +3863,7 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
         input.next();
 
         // Try to determine if this is a cast, lambda, or parenthesized expression
-        let saved = input.cursor();
+        let saved = input.save_state();
 
         // Try parsing as type + ')' for cast
         if let Ok(ty) = parse_type(input) {
@@ -4014,8 +3884,8 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
                 let can_be_cast = can_start_unary_expr(&next_after_rparen.kind);
 
                 if can_be_cast {
-                    input.next();
                     let close = input.peek().span;
+                    input.next();
                     let expr = parse_unary_expr(input)?;
                     // For intersection types, we create a special cast expression
                     // For now, we just use the first type (could be enhanced later)
@@ -4028,7 +3898,7 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
             }
         }
 
-        input.set_cursor(saved);
+        input.restore_state(&saved);
 
         // Check for lambda: () -> ... or (params) -> ...
         // Cursor is at ')' (the first token after the consumed '(').
@@ -4063,8 +3933,7 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
 
         // Parenthesized expression
         let expr = parse_expression(input)?;
-        input.expect(TokenKind::RParen)?;
-        let close = input.peek().span;
+        let close = input.expect_span(TokenKind::RParen)?;
         return Ok(Expr::Paren {
             paren_span: (open, close),
             expr: Box::new(expr),
@@ -4183,7 +4052,7 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
                             }));
                         }
                     }
-                    input.restore_state(saved);
+                    input.restore_state(&saved);
                 }
                 Ok(Expr::Ident(ident))
             } else {
@@ -4220,7 +4089,7 @@ fn parse_lambda_params_after_lparen(input: &ParseStream, open: Span) -> Result<L
     let mut idents = Vec::new();
 
     while !input.is(&TokenKind::RParen) && !input.is_empty() {
-        let saved = input.cursor();
+        let saved = input.save_state();
         // Try to parse as typed parameter: Type name
         let typed = parse_type(input)
             .ok()
@@ -4233,7 +4102,7 @@ fn parse_lambda_params_after_lparen(input: &ParseStream, open: Span) -> Result<L
                 name,
             });
         } else {
-            input.set_cursor(saved);
+            input.restore_state(&saved);
             idents.push(parse_lambda_param_name(input)?);
         }
         if !input.eat(&TokenKind::Comma) {
@@ -4301,8 +4170,8 @@ fn parse_new_expr(input: &ParseStream) -> Result<Expr> {
             let open = input.peek().span;
             input.next();
             if input.is(&TokenKind::RBracket) {
-                input.next();
                 let close = input.peek().span;
+                input.next();
                 dims.push(ArrayDim {
                     bracket_span: (open, close),
                     annotations: Vec::new(),
@@ -4310,8 +4179,7 @@ fn parse_new_expr(input: &ParseStream) -> Result<Expr> {
             } else {
                 let anns = parse_type_annotations(input);
                 let expr = parse_expression(input)?;
-                input.expect(TokenKind::RBracket)?;
-                let close = input.peek().span;
+                let close = input.expect_span(TokenKind::RBracket)?;
                 dim_exprs.push(ArrayDimExpr {
                     annotations: anns,
                     bracket_span: (open, close),
@@ -4348,11 +4216,9 @@ fn parse_new_expr(input: &ParseStream) -> Result<Expr> {
         };
 
         if input.is(&TokenKind::LParen) {
-            input.expect(TokenKind::LParen)?;
-            let open = input.peek().span;
+            let open = input.expect_span(TokenKind::LParen)?;
             let args = input.parse_terminated(parse_expression)?;
-            input.expect(TokenKind::RParen)?;
-            let close = input.peek().span;
+            let close = input.expect_span(TokenKind::RParen)?;
             let body = if input.is(&TokenKind::LBrace) {
                 let dl = parse_class_body_decl_list(input)?;
                 Some(dl)
@@ -4391,19 +4257,15 @@ fn parse_new_expr(input: &ParseStream) -> Result<Expr> {
 fn parse_switch_expr(input: &ParseStream) -> Result<Expr> {
     let switch_span = input.peek().span;
     input.expect(TokenKind::Switch)?;
-    input.expect(TokenKind::LParen)?;
-    let open = input.peek().span;
+    let open = input.expect_span(TokenKind::LParen)?;
     let selector = parse_expression(input)?;
-    input.expect(TokenKind::RParen)?;
-    let close = input.peek().span;
-    input.expect(TokenKind::LBrace)?;
-    let brace_open = input.peek().span;
+    let close = input.expect_span(TokenKind::RParen)?;
+    let brace_open = input.expect_span(TokenKind::LBrace)?;
     let mut cases = Vec::new();
     while !input.is(&TokenKind::RBrace) && !input.is_empty() {
         cases.push(parse_switch_arm(input)?);
     }
-    input.expect(TokenKind::RBrace)?;
-    let brace_close = input.peek().span;
+    let brace_close = input.expect_span(TokenKind::RBrace)?;
     Ok(Expr::Switch(SwitchExpr {
         switch_span,
         paren_span: (open, close),
@@ -4420,8 +4282,7 @@ fn parse_switch_arm(input: &ParseStream) -> Result<SwitchArm> {
         .next()
         .ok_or_else(|| crate::error::Error::new(input.peek().span, "expected case or default"))?;
 
-    if input.eat(&TokenKind::Arrow) {
-        let arrow = input.peek().span;
+    if let Some(arrow) = input.eat_span(&TokenKind::Arrow) {
         if input.is(&TokenKind::Throw) {
             let _throw_span = input.peek().span;
             input.next();

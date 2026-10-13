@@ -14,6 +14,8 @@ pub enum Annotation {
     SingleElement {
         at_token: Span,
         name: Path,
+        /// Single-element annotations have no `=`; this is an empty span
+        /// positioned right after the closing parenthesis.
         eq_token: Span,
         value: Box<ElementValue>,
     },
