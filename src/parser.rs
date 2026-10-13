@@ -618,11 +618,8 @@ fn parse_modifier(input: &ParseStream) -> Option<Modifier> {
             }
         }
         TokenKind::At => {
-            let ann = input.try_parse(Annotation::parse);
-            match ann {
-                Some(a) => Modifier::Annotation(a),
-                None => return None,
-            }
+            let ann = input.try_parse(Annotation::parse)?;
+            Modifier::Annotation(ann)
         }
         _ => return None,
     };

@@ -1,6 +1,6 @@
 [package]
 name = "java-lang"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2024"
 description = "A Java AST parser in Rust, syn-style API for Java 25 (JLS SE 25)"
 license = "MIT OR Apache-2.0"
@@ -14,7 +14,6 @@ thiserror = "2"
 unicode-xid = "0.2"
 
 [dev-dependencies]
-prettyplease = "0.2"
 walkdir = "2"
 
 [features]

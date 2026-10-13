@@ -154,7 +154,7 @@ fn test_android_sdk_sources() {
                     let start = offset.saturating_sub(200);
                     let end = (offset + 200).min(content.len());
                     eprintln!("  Context around error:");
-                    eprintln!("  {}", &content[start..end].replace('\n', "\\n"));
+                    eprintln!("  {}", content[start..end].replace('\n', "\\n"));
                 }
 
                 errors.push((rel_path.to_path_buf(), error_msg));

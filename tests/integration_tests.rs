@@ -618,10 +618,9 @@ fn test_module_declaration() {
 
 #[test]
 fn test_module_requires_static_transitive_order() {
-    let _cu: CompilationUnit = parse_str(
-        "module org.example { requires static transitive org.apiguardian.api; }",
-    )
-    .unwrap();
+    let _cu: CompilationUnit =
+        parse_str("module org.example { requires static transitive org.apiguardian.api; }")
+            .unwrap();
 }
 
 #[test]
@@ -745,10 +744,8 @@ fn test_wildcard_type() {
 
 #[test]
 fn test_wildcard_type_with_type_use_annotation() {
-    let _cu: CompilationUnit = parse_str(
-        "class Foo { ImmutableList<@UnknownKeyFor ? extends Bar> x; }",
-    )
-    .unwrap();
+    let _cu: CompilationUnit =
+        parse_str("class Foo { ImmutableList<@UnknownKeyFor ? extends Bar> x; }").unwrap();
 }
 
 #[test]
@@ -865,8 +862,22 @@ fn test_cast_expression() {
 #[test]
 fn test_cast_of_contextual_keyword_ident() {
     for word in [
-        "record", "sealed", "var", "yield", "open", "provides", "requires", "uses", "with",
-        "when", "to", "exports", "opens", "transitive", "permits", "module",
+        "record",
+        "sealed",
+        "var",
+        "yield",
+        "open",
+        "provides",
+        "requires",
+        "uses",
+        "with",
+        "when",
+        "to",
+        "exports",
+        "opens",
+        "transitive",
+        "permits",
+        "module",
     ] {
         let src = format!("class Foo {{ void m() {{ String s = (String) {word}; }} }}");
         parse_str::<CompilationUnit>(&src).unwrap();
