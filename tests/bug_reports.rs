@@ -178,7 +178,7 @@ fn bug_09_annotated_wildcard() {
 /// Source: <https://github.com/google/guava/blob/6b3a8d7498a7fde122967ba37a023ba3dcb47792/guava-tests/test/com/google/common/reflect/TypeTokenResolutionTest.java#L311>.
 #[test]
 fn bug_10_qualified_super() {
-    rejects(
+    accepts(
         r#"class Outer {
     class Inner {
     }

@@ -1546,7 +1546,7 @@ fn parse_constructor_body(input: &ParseStream) -> Result<ConstructorBody> {
     let mut explicit_constructor_call = None;
     let mut stmts = Vec::new();
 
-    if input.is(&TokenKind::This) || input.is(&TokenKind::Super) {
+    {
         let saved = input.cursor();
         let call = input.try_parse(parse_explicit_constructor_call);
         if let Some(call) = call {
@@ -1610,10 +1610,31 @@ fn parse_explicit_constructor_call(input: &ParseStream) -> Result<ExplicitConstr
                 semi_span,
             })
         }
-        _ => Err(crate::error::Error::new(
-            input.peek().span,
-            "expected this or super",
-        )),
+        _ => {
+            // Qualified superclass constructor invocation: `expr.super(args);`
+            let target = parse_postfix_expr_stop_before_super(input)?;
+            let dot_span = input.peek().span;
+            input.expect(TokenKind::Dot)?;
+            let type_args = parse_optional_type_arguments(input);
+            let super_span = input.peek().span;
+            input.expect(TokenKind::Super)?;
+            let open = input.peek().span;
+            input.expect(TokenKind::LParen)?;
+            let args = input.parse_terminated(parse_expression)?;
+            let close = input.peek().span;
+            input.expect(TokenKind::RParen)?;
+            let semi_span = input.peek().span;
+            input.expect(TokenKind::Semicolon)?;
+            Ok(ExplicitConstructorCall::SuperFromExpr {
+                target: Box::new(target),
+                dot_span,
+                type_args,
+                super_span,
+                paren_span: (open, close),
+                args,
+                semi_span,
+            })
+        }
     }
 }
 
@@ -3400,9 +3421,38 @@ fn parse_unary_expr(input: &ParseStream) -> Result<Expr> {
 }
 
 fn parse_postfix_expr(input: &ParseStream) -> Result<Expr> {
+    parse_postfix_expr_impl(input, false)
+}
+
+/// Parse a postfix expression, optionally stopping before a trailing
+/// `. [TypeArguments] super (` so the caller can treat it as a qualified
+/// superclass constructor invocation (`expr.super(args);`, JLS §8.8.7.1).
+fn parse_postfix_expr_stop_before_super(input: &ParseStream) -> Result<Expr> {
+    parse_postfix_expr_impl(input, true)
+}
+
+/// Checks whether the upcoming tokens are `. [TypeArguments] super (`,
+/// without consuming anything.
+fn peek_dot_super_call(input: &ParseStream) -> bool {
+    if !input.is(&TokenKind::Dot) {
+        return false;
+    }
+    let state = input.save_state();
+    input.next(); // consume '.'
+    let _ = parse_optional_type_arguments(input);
+    let matched =
+        input.is(&TokenKind::Super) && matches!(input.look_ahead(1).kind, TokenKind::LParen);
+    input.restore_state(state);
+    matched
+}
+
+fn parse_postfix_expr_impl(input: &ParseStream, stop_before_super_call: bool) -> Result<Expr> {
     let mut expr = parse_primary_expr(input)?;
 
     loop {
+        if stop_before_super_call && peek_dot_super_call(input) {
+            break;
+        }
         match &input.peek().kind {
             TokenKind::Dot => {
                 let dot_span = input.peek().span;

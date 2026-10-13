@@ -610,6 +610,46 @@ fn test_cast_of_contextual_keyword_ident() {
 }
 
 #[test]
+fn test_qualified_super_with_compound_target() {
+    for target in ["holder.outer", "getOuter()", "outers[0]"] {
+        let src = format!("class Sub {{ Sub() {{ {target}.super(); }} }}");
+        parse_str::<CompilationUnit>(&src).unwrap();
+    }
+}
+
+#[test]
+fn test_qualified_super_with_explicit_type_args() {
+    parse_str::<CompilationUnit>("class Sub { Sub() { outer.<String>super(\"x\"); } }").unwrap();
+}
+
+#[test]
+fn test_qualified_super_call_spans() {
+    let src = "class Sub { Sub() { outer.super(42); } }";
+    let cu: CompilationUnit = parse_str(src).unwrap();
+    let ClassBodyDecl::Constructor(ctor) = &as_class(&cu).body.declarations[0] else {
+        panic!("expected constructor declaration");
+    };
+    let ExplicitConstructorCall::SuperFromExpr {
+        paren_span,
+        semi_span,
+        ..
+    } = ctor.body.explicit_constructor_call.as_ref().unwrap()
+    else {
+        panic!("expected qualified super call");
+    };
+    assert_eq!(paren_span.0.source_text(src), "(");
+    assert_eq!(paren_span.1.source_text(src), ")");
+    assert_eq!(semi_span.source_text(src), ";");
+}
+
+fn as_class(cu: &CompilationUnit) -> &ClassDecl {
+    match &cu.type_decls[0] {
+        TypeDecl::Class(cls) => cls,
+        _ => panic!("expected class declaration"),
+    }
+}
+
+#[test]
 fn test_array_access() {
     let _cu: CompilationUnit =
         parse_str("class Foo { void m() { int x = arr[0]; int y = arr[i + 1]; } }").unwrap();
