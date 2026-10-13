@@ -3355,6 +3355,8 @@ fn can_start_unary_expr(kind: &TokenKind) -> bool {
             | TokenKind::Exports
             | TokenKind::Opens
             | TokenKind::Transitive
+            | TokenKind::Permits
+            | TokenKind::Module
             | TokenKind::Byte
             | TokenKind::Short
             | TokenKind::Int

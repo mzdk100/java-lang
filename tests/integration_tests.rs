@@ -599,6 +599,17 @@ fn test_cast_expression() {
 }
 
 #[test]
+fn test_cast_of_contextual_keyword_ident() {
+    for word in [
+        "record", "sealed", "var", "yield", "open", "provides", "requires", "uses", "with",
+        "when", "to", "exports", "opens", "transitive", "permits", "module",
+    ] {
+        let src = format!("class Foo {{ void m() {{ String s = (String) {word}; }} }}");
+        parse_str::<CompilationUnit>(&src).unwrap();
+    }
+}
+
+#[test]
 fn test_array_access() {
     let _cu: CompilationUnit =
         parse_str("class Foo { void m() { int x = arr[0]; int y = arr[i + 1]; } }").unwrap();
