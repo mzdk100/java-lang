@@ -163,7 +163,7 @@ fn bug_08_implicit_class() {
 /// Source: <https://github.com/apache/calcite/blob/8f27e24a02e7b76fc40b6cfd9b1d2cc96bc8b1b6/core/src/main/java/org/apache/calcite/sql/type/CompositeOperandTypeChecker.java#L93>.
 #[test]
 fn bug_09_annotated_wildcard() {
-    rejects(
+    accepts(
         r#"class Foo {
     ImmutableList<@UnknownKeyFor ? extends Bar> x;
 }

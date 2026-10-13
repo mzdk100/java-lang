@@ -2051,6 +2051,8 @@ fn parse_type_arguments(input: &ParseStream) -> Result<TypeArguments> {
     let mut gt_spans = Vec::new();
     let mut args = Vec::new();
     loop {
+        let saved = input.cursor();
+        let annotations = parse_type_annotations(input);
         if input.eat(&TokenKind::Question) {
             let wildcard_span = input.peek().span;
             let bound = if input.eat(&TokenKind::Extends) {
@@ -2061,10 +2063,12 @@ fn parse_type_arguments(input: &ParseStream) -> Result<TypeArguments> {
                 None
             };
             args.push(TypeArgument::Wildcard(Wildcard {
+                annotations,
                 bound,
                 span: wildcard_span,
             }));
         } else {
+            input.set_cursor(saved);
             args.push(TypeArgument::Type(Box::new(parse_type(input)?)));
         }
         if input.eat(&TokenKind::Gt) {
@@ -3905,8 +3909,6 @@ fn parse_primary_expr(input: &ParseStream) -> Result<Expr> {
     }
 }
 
-/// Parse a lambda parameter's `VariableDeclaratorId`/`ConciseLambdaParameter`
-/// name, which may be a real identifier or the unnamed-variable keyword `_`
 fn parse_lambda_param_name(input: &ParseStream) -> Result<LambdaParamName> {
     if input.is(&TokenKind::Underscore) {
         let span = input.next().span;
