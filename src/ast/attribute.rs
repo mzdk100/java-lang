@@ -33,8 +33,8 @@ impl Annotation {
         match self {
             Self::Marker { at_token, name } => at_token.join(name.span),
             Self::SingleElement {
-                at_token, value, ..
-            } => at_token.join(value.span()),
+                at_token, eq_token, ..
+            } => at_token.join(eq_token),
             Self::Normal {
                 at_token,
                 paren_span,

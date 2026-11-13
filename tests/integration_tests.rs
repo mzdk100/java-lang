@@ -1291,6 +1291,7 @@ public class Outer implements Runnable {\n\
 fn test_generic_and_delimiter_spans() {
     let src = "@Deprecated\n\
 @SuppressWarnings(value = \"x\")\n\
+@SuppressWarnings(\"y\")\n\
 class G<T extends Number> {\n\
     java.util.List<String> items;\n\n\
     void m(java.util.Map<String, java.util.List<Integer>> map) {\n\
@@ -1325,6 +1326,11 @@ class G<T extends Number> {\n\
     assert_eq!(paren_span.0.source_text(src), "(");
     assert_eq!(paren_span.1.source_text(src), ")");
     assert_eq!(pairs[0].eq_span.source_text(src), "=");
+    let Modifier::Annotation(single) = &cls.modifiers[2] else {
+        panic!("expected a third annotation modifier");
+    };
+    assert!(matches!(single, Annotation::SingleElement { .. }));
+    assert_eq!(single.span().source_text(src), "@SuppressWarnings(\"y\")");
 
     let type_params = cls.type_params.as_ref().unwrap();
     assert_eq!(type_params.lt_span.source_text(src), "<");
