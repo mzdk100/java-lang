@@ -2315,6 +2315,25 @@ fn parse_statement_with_comments(
     }))
 }
 
+/// Parse a name that may be the unnamed variable `_`.
+fn parse_unnamed_or_ident(input: &ParseStream) -> Result<Option<Ident>> {
+    if input.is(&TokenKind::Underscore) {
+        input.next();
+        Ok(None)
+    } else {
+        input.parse_ident().map(Some)
+    }
+}
+
+/// Parse a declarator name, accepting `_` for an unnamed variable.
+///
+/// Returns the name (`None` for `_`) and the span of the token that supplied
+/// it. Returns `None` when the current token cannot name a declarator.
+fn parse_declarator_name(input: &ParseStream) -> Option<(Option<Ident>, Span)> {
+    let span = input.peek().span;
+    parse_unnamed_or_ident(input).ok().map(|name| (name, span))
+}
+
 fn try_parse_local_var_decl_or_expr_stmt(
     input: &ParseStream,
     leading_comments: Vec<Comment>,
@@ -2333,44 +2352,42 @@ fn try_parse_local_var_decl_or_expr_stmt(
             parse_type(input).map(LocalVarType::Type)
         };
 
-        if let Ok(ty) = ty_result {
-            // Now check if next token is an identifier (local var decl) or something else
-            if input.is_any_ident() {
-                let name = input.parse_ident().ok()?;
+        if let Ok(ty) = ty_result
+            && let Some((name, _)) = parse_declarator_name(input)
+        {
+            let dims = parse_array_dims(input).ok().unwrap_or_default();
+            let initializer = if input.eat(&TokenKind::Eq) {
+                parse_expression(input).ok()
+            } else {
+                None
+            };
+            let mut declarators = vec![VariableDeclarator {
+                name,
+                dims,
+                initializer,
+            }];
+            while input.eat(&TokenKind::Comma) {
+                let (name, _) = parse_declarator_name(input)?;
                 let dims = parse_array_dims(input).ok().unwrap_or_default();
-                let initializer = if input.eat(&TokenKind::Eq) {
+                let init = if input.eat(&TokenKind::Eq) {
                     parse_expression(input).ok()
                 } else {
                     None
                 };
-                let mut declarators = vec![VariableDeclarator {
-                    name: Some(name),
+                declarators.push(VariableDeclarator {
+                    name,
                     dims,
-                    initializer,
-                }];
-                while input.eat(&TokenKind::Comma) {
-                    let name = input.parse_ident().ok()?;
-                    let dims = parse_array_dims(input).ok().unwrap_or_default();
-                    let init = if input.eat(&TokenKind::Eq) {
-                        parse_expression(input).ok()
-                    } else {
-                        None
-                    };
-                    declarators.push(VariableDeclarator {
-                        name: Some(name),
-                        dims,
-                        initializer: init,
-                    });
-                }
-                if let Some(semi_span) = input.eat_span(&TokenKind::Semicolon) {
-                    return Some(Stmt::LocalVarDecl(LocalVarDeclStmt {
-                        leading_comments,
-                        modifiers,
-                        ty,
-                        declarators,
-                        semi_span,
-                    }));
-                }
+                    initializer: init,
+                });
+            }
+            if let Some(semi_span) = input.eat_span(&TokenKind::Semicolon) {
+                return Some(Stmt::LocalVarDecl(LocalVarDeclStmt {
+                    leading_comments,
+                    modifiers,
+                    ty,
+                    declarators,
+                    semi_span,
+                }));
             }
         }
         input.restore_state(&saved);
@@ -2663,14 +2680,18 @@ fn parse_switch_labels(input: &ParseStream) -> Result<Vec<SwitchCase>> {
 /// Patterns are: `Type name` (type pattern) or `Type(...)` (record pattern).
 /// Returns false for simple constant values like `case FOO`.
 fn is_case_pattern(input: &ParseStream) -> bool {
+    // Bare unnamed pattern: `case _`
+    if input.is(&TokenKind::Underscore) {
+        return true;
+    }
     // Must start with an identifier (the type)
     if !input.is_any_ident() {
         return false;
     }
     let next = input.look_ahead(1);
     match &next.kind {
-        // Type pattern: `case Triangle t`
-        TokenKind::Ident(_) => true,
+        // Type pattern: `case Triangle t` or `case Triangle _`
+        TokenKind::Ident(_) | TokenKind::Underscore => true,
         // Record pattern: `case Pair(...)`
         TokenKind::LParen => true,
         // Not a pattern: `case CONSTANT` or `case CONSTANT ->`
@@ -2798,9 +2819,8 @@ fn try_parse_local_var_decl(input: &ParseStream) -> Option<LocalVarDeclStmt> {
         };
 
         if let Ok(ty) = ty_result
-            && input.is_any_ident()
+            && let Some((name, _)) = parse_declarator_name(input)
         {
-            let name = input.parse_ident().ok()?;
             let dims = parse_array_dims(input).ok().unwrap_or_default();
             let initializer = if input.eat(&TokenKind::Eq) {
                 parse_expression(input).ok()
@@ -2808,12 +2828,12 @@ fn try_parse_local_var_decl(input: &ParseStream) -> Option<LocalVarDeclStmt> {
                 None
             };
             let mut declarators = vec![VariableDeclarator {
-                name: Some(name),
+                name,
                 dims,
                 initializer,
             }];
             while input.eat(&TokenKind::Comma) {
-                let name = input.parse_ident().ok()?;
+                let (name, _) = parse_declarator_name(input)?;
                 let dims = parse_array_dims(input).ok().unwrap_or_default();
                 let init = if input.eat(&TokenKind::Eq) {
                     parse_expression(input).ok()
@@ -2821,7 +2841,7 @@ fn try_parse_local_var_decl(input: &ParseStream) -> Option<LocalVarDeclStmt> {
                     None
                 };
                 declarators.push(VariableDeclarator {
-                    name: Some(name),
+                    name,
                     dims,
                     initializer: init,
                 });
@@ -2866,9 +2886,8 @@ fn try_parse_enhanced_for(
     };
 
     if let Ok(ty) = ty_result
-        && input.is_any_ident()
+        && let Some((name, _)) = parse_declarator_name(input)
     {
-        let name = input.parse_ident().ok()?;
         let dims = parse_array_dims(input).ok().unwrap_or_default();
         if let Some(colon_span) = input.eat_span(&TokenKind::Colon) {
             let iterable = parse_expression(input).ok()?;
@@ -2883,7 +2902,7 @@ fn try_parse_enhanced_for(
                     modifiers,
                     ty,
                     declarators: vec![VariableDeclarator {
-                        name: Some(name),
+                        name,
                         dims,
                         initializer: None,
                     }],
@@ -2997,8 +3016,7 @@ fn parse_try_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result
                     parse_type(input).map(LocalVarType::Type)
                 };
                 if let Ok(ty) = ty_result
-                    && input.is_any_ident()
-                    && let Ok(name) = input.parse_ident()
+                    && let Some((name, _)) = parse_declarator_name(input)
                 {
                     let dims = parse_array_dims(input).unwrap_or_default();
                     let initializer = if input.eat(&TokenKind::Eq) {
@@ -3007,7 +3025,7 @@ fn parse_try_stmt(input: &ParseStream, leading_comments: Vec<Comment>) -> Result
                         None
                     };
                     let declarators = vec![VariableDeclarator {
-                        name: Some(name),
+                        name,
                         dims,
                         initializer,
                     }];
@@ -3079,7 +3097,7 @@ fn parse_catch_clauses(input: &ParseStream) -> Result<Vec<CatchClause>> {
         while input.eat(&TokenKind::Pipe) {
             types.push(parse_type(input)?);
         }
-        let name = input.parse_ident()?;
+        let name = parse_unnamed_or_ident(input)?;
         let close = input
             .expect_span(TokenKind::RParen)
             .ok()
@@ -3303,17 +3321,16 @@ fn parse_binary_expr(input: &ParseStream, min_prec: u8) -> Result<Expr> {
                     })),
                 });
                 continue;
-            } else if input.is_any_ident() {
-                // Type pattern: instanceof String s
-                let name = input.parse_ident()?;
+            } else if let Some((name, name_span)) = parse_declarator_name(input) {
+                // Type pattern: instanceof String s, instanceof String _
                 left = Expr::Instanceof(InstanceofExpr {
                     expr: Box::new(left),
                     instanceof_span,
                     pattern: InstanceofPattern::Pattern(Pattern::TypePattern(TypePattern {
                         annotations: vec![],
                         ty,
-                        name: Some(name),
-                        span: ty_span.join(input.peek().span),
+                        name,
+                        span: ty_span.join(name_span),
                     })),
                 });
                 continue;
@@ -4315,6 +4332,10 @@ fn parse_switch_arm(input: &ParseStream) -> Result<SwitchArm> {
 // ============================================================================
 
 fn parse_pattern(input: &ParseStream) -> Result<Pattern> {
+    if let Some(span) = input.eat_span(&TokenKind::Underscore) {
+        return Ok(Pattern::Unnamed(span));
+    }
+
     let annotations = parse_annotations(input)?;
 
     // Try record pattern: Type(Component1, Component2)
@@ -4339,9 +4360,10 @@ fn parse_pattern(input: &ParseStream) -> Result<Pattern> {
         }))
     } else {
         // Type pattern
-        let name = input.parse_ident().ok();
+        let (name, name_span) =
+            parse_declarator_name(input).map_or((None, None), |(name, span)| (name, Some(span)));
         let start = annotations.first().map(|a| a.span()).unwrap_or(ty.span());
-        let end = name.as_ref().map(|n| n.span()).unwrap_or(ty.span());
+        let end = name_span.unwrap_or_else(|| ty.span());
         Ok(Pattern::TypePattern(TypePattern {
             annotations,
             ty,
