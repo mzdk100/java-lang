@@ -9,6 +9,8 @@ use super::{attribute::Annotation, expr::Expr, ty::Type};
 pub enum Pattern {
     TypePattern(TypePattern),
     RecordPattern(RecordPattern),
+    /// An unnamed pattern: `_` in a switch label or record pattern.
+    Unnamed(Span),
 }
 
 impl Pattern {
@@ -16,6 +18,7 @@ impl Pattern {
         match self {
             Self::TypePattern(p) => p.span,
             Self::RecordPattern(p) => p.span,
+            Self::Unnamed(span) => *span,
         }
     }
 }

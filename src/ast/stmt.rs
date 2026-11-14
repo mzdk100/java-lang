@@ -487,7 +487,7 @@ pub struct CatchClause {
 pub struct CatchParam {
     pub modifiers: Vec<Modifier>,
     pub ty: CatchType,
-    pub name: Ident,
+    pub name: Option<Ident>,
 }
 
 /// The type in a catch parameter (can be a union type with `|`).

@@ -27,7 +27,8 @@
 //!
 //! - **Syn-style API**: Uses `Parse` trait and `ParseStream` similar to [`syn`].
 //! - **Complete coverage**: Supports Java 25 features including records, sealed classes,
-//!   pattern matching, switch expressions, text blocks, and unnamed variables.
+//!   pattern matching, switch expressions, text blocks, and unnamed variables and
+//!   patterns.
 //! - **Span tracking**: Every AST node carries span information for error reporting.
 //! - **Zero-copy identifiers**: Uses `Ident` with interning for efficient comparison.
 

@@ -664,8 +664,19 @@ fn test_array_initializer() {
 
 #[test]
 fn test_instanceof_pattern() {
-    let _cu: CompilationUnit =
-        parse_str("class Foo { void m(Object o) { if (o instanceof String s) { } } }").unwrap();
+    let src = "class Foo { void m(Object o) { if (o instanceof String s) { } } }";
+    let cu: CompilationUnit = parse_str(src).unwrap();
+    let Stmt::If(if_stmt) = &method_body(&cu).stmts[0] else {
+        panic!("expected an if statement");
+    };
+    let Expr::Instanceof(instanceof) = &if_stmt.cond else {
+        panic!("expected an instanceof expression");
+    };
+    let InstanceofPattern::Pattern(Pattern::TypePattern(pat)) = &instanceof.pattern else {
+        panic!("expected a type pattern");
+    };
+    assert_eq!(pat.name.as_ref().unwrap().name, "s");
+    assert_eq!(pat.span.source_text(src), "String s");
 }
 
 #[test]
@@ -1466,4 +1477,344 @@ fn test_failed_speculation_does_not_duplicate_comments() {
         1,
         "the comment was recorded more than once"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Unnamed variables and patterns (JEP 456)
+// ---------------------------------------------------------------------------
+
+fn class_body(cu: &CompilationUnit) -> &ClassBodyDeclList {
+    match &type_decls(cu)[0] {
+        TypeDecl::Class(c) => &c.body,
+        other => panic!("expected a class declaration, got {other:?}"),
+    }
+}
+
+fn method_body(cu: &CompilationUnit) -> &Block {
+    class_body(cu)
+        .declarations
+        .iter()
+        .find_map(|decl| match decl {
+            ClassBodyDecl::Method(m) => m.body.as_ref(),
+            _ => None,
+        })
+        .expect("expected a method with a body")
+}
+
+fn local_var_decl(stmt: &Stmt) -> &LocalVarDeclStmt {
+    match stmt {
+        Stmt::LocalVarDecl(decl) => decl,
+        other => panic!("expected a local variable declaration, got {other:?}"),
+    }
+}
+
+fn first_switch_arm_pattern(cu: &CompilationUnit) -> &Pattern {
+    let decl = local_var_decl(&method_body(cu).stmts[0]);
+    let Some(Expr::Switch(switch_expr)) = &decl.declarators[0].initializer else {
+        panic!("expected a switch expression initializer");
+    };
+    let SwitchArm::Expr(SwitchCase::CasePattern { pattern, .. }, _, _) = &switch_expr.cases[0]
+    else {
+        panic!("expected a case pattern arm");
+    };
+    pattern
+}
+
+#[test]
+fn test_unnamed_local_variable_with_var() {
+    let cu: CompilationUnit = parse_str("class Foo { void m() { var _ = compute(); } }").unwrap();
+    let decl = local_var_decl(&method_body(&cu).stmts[0]);
+    assert!(matches!(decl.ty, LocalVarType::Var(_)));
+    assert_eq!(decl.declarators.len(), 1);
+    assert!(decl.declarators[0].name.is_none());
+    assert!(decl.declarators[0].initializer.is_some());
+}
+
+#[test]
+fn test_unnamed_local_variable_with_explicit_type() {
+    let cu: CompilationUnit = parse_str("class Foo { void m() { String _ = \"\"; } }").unwrap();
+    let decl = local_var_decl(&method_body(&cu).stmts[0]);
+    assert!(matches!(decl.ty, LocalVarType::Type(_)));
+    assert!(decl.declarators[0].name.is_none());
+}
+
+#[test]
+fn test_unnamed_local_variable_among_named_declarators() {
+    let cu: CompilationUnit = parse_str("class Foo { void m() { int _ = 1, x = 2; } }").unwrap();
+    let decl = local_var_decl(&method_body(&cu).stmts[0]);
+    assert_eq!(decl.declarators.len(), 2);
+    assert!(decl.declarators[0].name.is_none());
+    assert_eq!(decl.declarators[1].name.as_ref().unwrap().name, "x");
+}
+
+#[test]
+fn test_unnamed_local_variable_followed_by_statement() {
+    let cu: CompilationUnit =
+        parse_str("class Foo { void m() { var _ = compute(); Object _ = next(); } }").unwrap();
+    let body = method_body(&cu);
+    assert_eq!(body.stmts.len(), 2);
+    assert!(local_var_decl(&body.stmts[0]).declarators[0].name.is_none());
+    assert!(local_var_decl(&body.stmts[1]).declarators[0].name.is_none());
+}
+
+#[test]
+fn test_unnamed_variable_in_basic_for_loop() {
+    let cu: CompilationUnit =
+        parse_str("class Foo { void m() { for (int _ = 0; x < 1; x++) { } } }").unwrap();
+    let Stmt::For(for_stmt) = &method_body(&cu).stmts[0] else {
+        panic!("expected a for statement");
+    };
+    let ForInit::LocalVarDecl(decl) = &for_stmt.init else {
+        panic!("expected a local variable declaration initializer");
+    };
+    assert!(decl.declarators[0].name.is_none());
+}
+
+#[test]
+fn test_unnamed_variable_in_enhanced_for_loop() {
+    let cu: CompilationUnit = parse_str("class Foo { void m() { for (var _ : xs) { } } }").unwrap();
+    let Stmt::EnhancedFor(for_stmt) = &method_body(&cu).stmts[0] else {
+        panic!("expected an enhanced for statement");
+    };
+    assert!(matches!(for_stmt.var_decl.ty, LocalVarType::Var(_)));
+    assert!(for_stmt.var_decl.declarators[0].name.is_none());
+}
+
+#[test]
+fn test_unnamed_variable_in_try_with_resources() {
+    let cu: CompilationUnit =
+        parse_str("class Foo { void m() { try (var _ = open()) { } } }").unwrap();
+    let Stmt::Try(TryStmt::TryWithResources { resources, .. }) = &method_body(&cu).stmts[0] else {
+        panic!("expected a try-with-resources statement");
+    };
+    let [TryResource::Decl(decl)] = resources.as_slice() else {
+        panic!("expected a single declared resource");
+    };
+    assert!(decl.declarators[0].name.is_none());
+}
+
+#[test]
+fn test_multiple_unnamed_variables_in_try_with_resources() {
+    let cu: CompilationUnit =
+        parse_str("class Foo { void m() { try (var _ = a(); var _ = b()) { } } }").unwrap();
+    let Stmt::Try(TryStmt::TryWithResources { resources, .. }) = &method_body(&cu).stmts[0] else {
+        panic!("expected a try-with-resources statement");
+    };
+    assert_eq!(resources.len(), 2);
+    for resource in resources {
+        let TryResource::Decl(decl) = resource else {
+            panic!("expected a declared resource");
+        };
+        assert!(decl.declarators[0].name.is_none());
+    }
+}
+
+#[test]
+fn test_unnamed_catch_parameter() {
+    let cu: CompilationUnit =
+        parse_str("class Foo { void m() { try { } catch (RuntimeException _) { } } }").unwrap();
+    let Stmt::Try(TryStmt::Basic { catches, .. }) = &method_body(&cu).stmts[0] else {
+        panic!("expected a try statement");
+    };
+    assert_eq!(catches.len(), 1);
+    assert!(catches[0].param.name.is_none());
+    assert_eq!(catches[0].param.ty.types.len(), 1);
+}
+
+#[test]
+fn test_unnamed_catch_parameter_multi_catch() {
+    let cu: CompilationUnit =
+        parse_str("class Foo { void m() { try { } catch (A | B _) { } } }").unwrap();
+    let Stmt::Try(TryStmt::Basic { catches, .. }) = &method_body(&cu).stmts[0] else {
+        panic!("expected a try statement");
+    };
+    assert!(catches[0].param.name.is_none());
+    assert_eq!(catches[0].param.ty.types.len(), 2);
+}
+
+#[test]
+fn test_named_catch_parameter_still_has_name() {
+    let cu: CompilationUnit =
+        parse_str("class Foo { void m() { try { } catch (A | B e) { } } }").unwrap();
+    let Stmt::Try(TryStmt::Basic { catches, .. }) = &method_body(&cu).stmts[0] else {
+        panic!("expected a try statement");
+    };
+    assert_eq!(catches[0].param.name.as_ref().unwrap().name, "e");
+}
+
+#[test]
+fn test_unnamed_instanceof_type_pattern() {
+    let src = "class Foo { void m(Object o) { if (o instanceof String _) { } } }";
+    let cu: CompilationUnit = parse_str(src).unwrap();
+    let Stmt::If(if_stmt) = &method_body(&cu).stmts[0] else {
+        panic!("expected an if statement");
+    };
+    let Expr::Instanceof(instanceof) = &if_stmt.cond else {
+        panic!("expected an instanceof expression");
+    };
+    let InstanceofPattern::Pattern(Pattern::TypePattern(pat)) = &instanceof.pattern else {
+        panic!("expected a type pattern");
+    };
+    assert!(pat.name.is_none());
+    assert_eq!(pat.span.source_text(src), "String _");
+    assert_eq!(instanceof.span().source_text(src), "o instanceof String _");
+}
+
+#[test]
+fn test_instanceof_record_pattern_with_unnamed_component() {
+    let cu: CompilationUnit =
+        parse_str("class Foo { void m(Object o) { if (o instanceof Box(_)) { } } }").unwrap();
+    let Stmt::If(if_stmt) = &method_body(&cu).stmts[0] else {
+        panic!("expected an if statement");
+    };
+    let Expr::Instanceof(instanceof) = &if_stmt.cond else {
+        panic!("expected an instanceof expression");
+    };
+    let InstanceofPattern::Pattern(Pattern::RecordPattern(record)) = &instanceof.pattern else {
+        panic!("expected a record pattern");
+    };
+    assert!(matches!(record.components[0], Pattern::Unnamed(_)));
+}
+
+#[test]
+fn test_unnamed_switch_type_pattern() {
+    let src = "class Foo { void m(Object o) { var x = switch (o) { case String _ -> 1; default -> 0; }; } }";
+    let cu: CompilationUnit = parse_str(src).unwrap();
+    let Pattern::TypePattern(pat) = first_switch_arm_pattern(&cu) else {
+        panic!("expected a type pattern");
+    };
+    assert!(pat.name.is_none());
+    assert_eq!(pat.span.source_text(src), "String _");
+}
+
+#[test]
+fn test_unnamed_switch_record_pattern_component() {
+    let src = "class Foo { void m(Object o) { var x = switch (o) { case Box(RedBall _) -> 1; default -> 0; }; } }";
+    let cu: CompilationUnit = parse_str(src).unwrap();
+    let Pattern::RecordPattern(record) = first_switch_arm_pattern(&cu) else {
+        panic!("expected a record pattern");
+    };
+    let Pattern::TypePattern(pat) = &record.components[0] else {
+        panic!("expected a type pattern component");
+    };
+    assert!(pat.name.is_none());
+    assert_eq!(pat.span.source_text(src), "RedBall _");
+}
+
+#[test]
+fn test_bare_unnamed_switch_pattern() {
+    let src =
+        "class Foo { void m(Object o) { var x = switch (o) { case _ -> 1; default -> 0; }; } }";
+    let cu: CompilationUnit = parse_str(src).unwrap();
+    let Pattern::Unnamed(span) = first_switch_arm_pattern(&cu) else {
+        panic!("expected an unnamed pattern");
+    };
+    assert_eq!(span.source_text(src), "_");
+}
+
+#[test]
+fn test_bare_unnamed_switch_record_pattern_component() {
+    let src = "class Foo { void m(Object o) { var x = switch (o) { case Box(_) -> 1; default -> 0; }; } }";
+    let cu: CompilationUnit = parse_str(src).unwrap();
+    let Pattern::RecordPattern(record) = first_switch_arm_pattern(&cu) else {
+        panic!("expected a record pattern");
+    };
+    assert!(matches!(record.components[0], Pattern::Unnamed(_)));
+}
+
+#[test]
+fn test_nested_unnamed_pattern_in_switch_record_pattern() {
+    let cu: CompilationUnit = parse_str(
+        "class Foo { void m(Object o) { var x = switch (o) { case Box(Box(_), _) -> 1; default -> 0; }; } }",
+    )
+    .unwrap();
+    let Pattern::RecordPattern(record) = first_switch_arm_pattern(&cu) else {
+        panic!("expected a record pattern");
+    };
+    let Pattern::RecordPattern(inner) = &record.components[0] else {
+        panic!("expected a nested record pattern");
+    };
+    assert!(matches!(inner.components[0], Pattern::Unnamed(_)));
+    assert!(matches!(record.components[1], Pattern::Unnamed(_)));
+}
+
+#[test]
+fn test_unnamed_pattern_in_switch_statement_labels() {
+    let cu: CompilationUnit = parse_str(
+        "class Foo { void m(Object o) { switch (o) { case String _: break; default: break; } } }",
+    )
+    .unwrap();
+    let Stmt::Switch(switch_stmt) = &method_body(&cu).stmts[0] else {
+        panic!("expected a switch statement");
+    };
+    let SwitchCase::CasePattern { pattern, .. } = &switch_stmt.cases[0].labels[0] else {
+        panic!("expected a case pattern label");
+    };
+    let Pattern::TypePattern(pat) = pattern else {
+        panic!("expected a type pattern");
+    };
+    assert!(pat.name.is_none());
+}
+
+#[test]
+fn test_bare_unnamed_pattern_in_switch_statement_labels() {
+    let cu: CompilationUnit = parse_str(
+        "class Foo { void m(Object o) { switch (o) { case _: break; default: break; } } }",
+    )
+    .unwrap();
+    let Stmt::Switch(switch_stmt) = &method_body(&cu).stmts[0] else {
+        panic!("expected a switch statement");
+    };
+    let SwitchCase::CasePattern { pattern, .. } = &switch_stmt.cases[0].labels[0] else {
+        panic!("expected a case pattern label");
+    };
+    assert!(matches!(pattern, Pattern::Unnamed(_)));
+}
+
+#[test]
+fn test_unnamed_switch_pattern_with_guard() {
+    let cu: CompilationUnit = parse_str(
+        "class Foo { void m(Object o) { var x = switch (o) { case String _ when o != null -> 1; default -> 0; }; } }",
+    )
+    .unwrap();
+    let decl = local_var_decl(&method_body(&cu).stmts[0]);
+    let Some(Expr::Switch(switch_expr)) = &decl.declarators[0].initializer else {
+        panic!("expected a switch expression initializer");
+    };
+    let SwitchArm::Expr(SwitchCase::CasePattern { pattern, guard, .. }, _, _) =
+        &switch_expr.cases[0]
+    else {
+        panic!("expected a case pattern arm");
+    };
+    let Pattern::TypePattern(pat) = pattern else {
+        panic!("expected a type pattern");
+    };
+    assert!(pat.name.is_none());
+    assert!(guard.is_some());
+}
+
+#[test]
+fn test_unnamed_var_lambda_parameter() {
+    for expression in ["(var _) -> 0", "(var _, var _) -> 0", "(var x, var _) -> x"] {
+        let source = format!("class Foo {{ Object f = {expression}; }}");
+        assert!(
+            parse_str::<CompilationUnit>(&source).is_ok(),
+            "{expression}"
+        );
+    }
+}
+
+#[test]
+fn test_underscore_still_rejected_outside_unnamed_positions() {
+    for source in [
+        "class _ { }",
+        "class Foo { int _; }",
+        "class Foo { void _() { } }",
+        "class Foo { int x = _; }",
+        "class Foo { void m() { int x = _; } }",
+        "class Foo { void m() { _(); } }",
+        "class Foo { void m(int _) { } }",
+    ] {
+        assert!(parse_str::<CompilationUnit>(source).is_err(), "{source}");
+    }
 }
